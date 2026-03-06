@@ -222,12 +222,12 @@ void BufferCache::BindVertexBuffers(const Vulkan::GraphicsPipeline& pipeline) {
         instance.IsNullDescriptorSupported() ? VK_NULL_HANDLE : GetBuffer(NULL_BUFFER_ID).Handle();
     for (const auto& buffer : guest_buffers) {
         if (buffer.GetSize() > 0) {
-            const auto host_buffer_info =
-                std::ranges::find_if(ranges_merged, [&](const BufferRange& range) {
-                    return buffer.base_address >= range.base_address &&
-                           buffer.base_address < range.end_address;
-                });
-            ASSERT(host_buffer_info != ranges_merged.cend());
+            const auto it = std::ranges::upper_bound(
+                ranges_merged, buffer.base_address, std::less{},
+                &BufferRange::base_address);
+            ASSERT(it != ranges_merged.begin());
+            const auto host_buffer_info = std::prev(it);
+            ASSERT(buffer.base_address < host_buffer_info->end_address);
             host_buffers.emplace_back(host_buffer_info->vk_buffer);
             host_offsets.push_back(host_buffer_info->offset + buffer.base_address -
                                    host_buffer_info->base_address);

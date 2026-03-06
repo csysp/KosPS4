@@ -62,7 +62,7 @@ ASSERT(it != ranges_merged.begin());
 const auto host_buffer_info = std::prev(it);
 ```
 
-**Status:** Not started
+**Status:** Done
 
 ---
 
@@ -167,7 +167,7 @@ Pipeline compilation (`vkCreateGraphicsPipelines` / `vkCreateComputePipelines`) 
 | # | Issue | File(s) | Risk | Impact | Effort | Status |
 |---|-------|---------|------|--------|--------|--------|
 | 0.1 | Dead GC (memory leak bug) | `buffer_cache.cpp:841` | Very Low | Critical | 1 line | Done |
-| 1.1 | O(n) vertex buffer lookup | `buffer_cache.cpp:223` | Very Low | Medium-High | 3 lines | Not started |
+| 1.1 | O(n) vertex buffer lookup | `buffer_cache.cpp:223` | Very Low | Medium-High | 3 lines | Done |
 | 2.1 | Broad pipeline barriers | `buffer_cache.cpp:326,659` | Medium | High | ~20 lines | Not started |
 | 2.2 | Duplicate FindImage calls | `vk_rasterizer.cpp:679` | Medium | Medium | ~15 lines | Not started |
 | 3.1 | O(n) ResetBindings | `vk_rasterizer.h:106` | Medium | Medium | ~20 lines | Not started |
