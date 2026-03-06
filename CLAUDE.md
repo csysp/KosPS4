@@ -21,9 +21,15 @@ cmake --build build
 
 ---
 
+## Target Game
+
+**Bloodborne** — all performance and memory work is scoped to Bloodborne compatibility and behavior. Use it as the primary regression title for all changes. Observe VRAM growth, frame time, and hitching specifically during Bloodborne gameplay (Central Yharnam → Cleric Beast fight is a good benchmark scene).
+
+---
+
 ## Performance Audit Findings
 
-Audit date: 2026-03-06. Analyzed the Vulkan rendering hot path (per-draw and per-frame operations).
+Audit date: 2026-03-06. Analyzed the Vulkan rendering hot path (per-draw and per-frame operations). Scoped to Bloodborne.
 
 ### Phase 0: Critical Bug
 
