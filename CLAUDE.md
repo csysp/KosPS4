@@ -198,10 +198,144 @@ Items 0.1 and 1.1 can ship together with near-zero regression risk. Item 2.1 req
 
 ---
 
+## Memory Leak Audit
+
+Audit date: 2026-03-06. Scoped to Bloodborne. Focus: VRAM and heap growth over a 30-minute play session from the Hunter's Dream through Central Yharnam to the Cleric Beast fight.
+
+### ML-1: ShaderModule Handles Leaked at Shutdown
+
+**File:** `src/video_core/renderer_vulkan/vk_pipeline_cache.cpp:295`, `vk_shader_util.cpp:257`
+
+`CompileSPV()` returns a raw `vk::ShaderModule` (not `vk::UniqueShaderModule`). These handles are stored in `Program::modules` inside `program_cache`. `~PipelineCache()` never iterates `program_cache` to call `device.destroyShaderModule()`. Hundreds of shader modules are silently leaked at emulator shutdown.
+
+**Impact:** Shutdown-time leak only — no per-session growth. However it generates Vulkan validation errors (`VUID-vkDestroyDevice-device-05137`) and is trivially fixable.
+
+**Fix:** Add to `~PipelineCache()` after joining threads:
+```cpp
+const auto& device = instance.GetDevice();
+for (const auto& [_, program] : program_cache) {
+    for (const auto& m : program->modules) {
+        if (m.module) {
+            device.destroyShaderModule(m.module);
+        }
+    }
+}
+```
+
+**Status:** Not started
+
+---
+
+### ML-2: Texture Cache GC Blind Spot — `trigger_gc_memory = 0` Path
+
+**File:** `src/video_core/texture_cache/texture_cache.cpp:35-38, 969-973`
+
+When `instance.CanReportMemoryUsage()` is false (driver doesn't support `VK_EXT_memory_budget`), `trigger_gc_memory` is set to `0`. At line 972, `if (total_used_memory < trigger_gc_memory)` becomes `if (0 < 0)` — always false — so GC *always* runs every frame regardless of memory pressure, burning CPU time each submit for the no-op case when `total_used_memory` (accumulated via `guest_size` estimates) is also 0 at startup.
+
+More critically, when the driver *does* support `memory_budget`, `GetDeviceMemoryUsage()` overwrites the estimated `total_used_memory` (line 970). If the driver reports less usage than the estimate (e.g. memory-compressed formats), `trigger_gc_memory` may never be reached, silently preventing all GC.
+
+**Impact:** Either always-running GC (wasted CPU) or never-running GC (growing VRAM) depending on driver. For Bloodborne on AMD/Intel without `memory_budget`, GC runs every frame but `ticks_to_destroy=16` is fine. On NVIDIA (which does report `memory_budget`), verify GC actually fires under real VRAM pressure.
+
+**Fix:** Add a fallback estimator: when `CanReportMemoryUsage()` is false, use `total_used_memory` (the `guest_size`-accumulated counter) rather than replacing it with 0 at the check site.
+
+**Status:** Not started
+
+---
+
+### ML-3: Texture Cache `image_map` and `page_table` — Vector Capacity Never Trimmed
+
+**File:** `src/video_core/texture_cache/texture_cache.cpp:831, 839-854`
+
+`page_table[page]` is a `vector<ImageId>`. Images are registered with `push_back` (line 831) and unregistered with `erase` (line 853). After a burst of image creation/destruction (e.g. Bloodborne's loading screens create/destroy hundreds of render targets), vectors for heavily-used pages accumulate high `capacity` without ever shrinking. Across a 4 KB page table covering a 4 GB address space, this can accumulate MB of fragmented `vector` storage.
+
+**Fix:** After `erase`, `shrink_to_fit()` when the vector becomes empty:
+```cpp
+if (image_ids.empty()) {
+    image_ids.shrink_to_fit();
+}
+```
+
+**Status:** Not started
+
+---
+
+### ML-4: `surface_metas` Map Grows Without Dedicated GC
+
+**File:** `src/video_core/texture_cache/texture_cache.cpp:670, 676, 692, 1044-1050`
+
+`surface_metas` (a `tsl::robin_map`) entries for CMASK/FMASK/HTILE addresses are only removed inside `DeleteImage()`. However, `FreeImage()` → `DeleteImage()` is only called from GC or explicit invalidation. If images are never freed (e.g. VRAM usage stays below `trigger_gc_memory`), `surface_metas` grows monotonically with every unique render target surface seen. Bloodborne uses dozens of unique render target configurations per scene transition.
+
+**Impact:** Unbounded growth during normal play on machines with large VRAM (e.g. 16+ GB GPUs where GC never triggers). Each entry is ~64 bytes; 10,000 entries = ~640 KB, non-trivial over a long session.
+
+**Fix:** This is fundamentally tied to fixing ML-2 (ensuring GC runs). Additionally, consider a `surface_metas.max_load_factor(0.5)` or periodic sweep to remove entries whose associated image no longer exists.
+
+**Status:** Blocked on ML-2
+
+---
+
+### ML-5: `UnmapMemory` Skips Image Data Download
+
+**File:** `src/video_core/texture_cache/texture_cache.cpp:197`
+
+`TextureCache::UnmapMemory()` frees images without downloading their data back to host memory (the `TODO` at line 197). When the PS4 game unmaps and remaps a virtual address range — which Bloodborne does during scene transitions — any dirty GPU-side image data is discarded silently. This causes visual corruption (textures go black or show stale data).
+
+**Impact:** Correctness bug that may explain texture corruption in Bloodborne. Not a memory leak per se but is the root cause of one class of image re-creation churn (game unmaps → remaps → emulator creates new images → old images linger in GC queue).
+
+**Fix:** Before `FreeImage(id)`, check `image.usage.transfer_src` and issue a readback if dirty:
+```cpp
+for (const ImageId id : deleted_images) {
+    auto& image = slot_images[id];
+    if (image.flags & ImageFlagBits::GpuModified) {
+        DownloadImageMemory(id);
+    }
+    FreeImage(id);
+}
+```
+
+**Status:** Not started
+
+---
+
+### ML-6: `ObjectManager<T>` Raw `new` Without Destructor Cleanup
+
+**File:** `src/core/libraries/np/object_manager.h:28, 47`
+
+`ObjectManager` stores raw `T*` pointers via `new T{args...}` (line 28) and frees them via `delete obj` (line 47). The struct itself has no destructor — if the game exits without calling the corresponding `DeleteObject` for every `CreateObject`, all allocated objects leak. This affects `np_tus.cpp` (`NpTusRequest`, `NpTusTitleContext`) and potentially other users.
+
+**Fix:** Add a destructor to `ObjectManager`:
+```cpp
+~ObjectManager() {
+    std::scoped_lock lk{mutex};
+    for (auto* obj : objects) {
+        delete obj;
+    }
+}
+```
+
+**Status:** Not started
+
+---
+
+### Memory Leak Roadmap
+
+| # | Issue | File(s) | Type | Impact | Effort | Status |
+|---|-------|---------|------|--------|--------|--------|
+| ML-1 | ShaderModule handles not destroyed | `vk_pipeline_cache.cpp:295` | Shutdown leak | Low (VK validation) | ~8 lines | Not started |
+| ML-2 | Texture GC trigger logic broken | `texture_cache.cpp:35,972` | Logic bug → no GC | High (VRAM growth) | ~10 lines | Not started |
+| ML-3 | Page table vector capacity not trimmed | `texture_cache.cpp:831,853` | Heap fragmentation | Medium | ~3 lines | Not started |
+| ML-4 | `surface_metas` grows without GC | `texture_cache.cpp:670` | Unbounded map | Medium | Blocked on ML-2 | Not started |
+| ML-5 | `UnmapMemory` drops dirty image data | `texture_cache.cpp:197` | Correctness + churn | High (visual bugs) | ~10 lines | Not started |
+| ML-6 | `ObjectManager` no destructor | `object_manager.h:28` | Shutdown leak | Low (NP libs) | ~5 lines | Not started |
+
+**Suggested order:** ML-2 first (gates ML-4, fixes VRAM growth), then ML-5 (correctness, reduces image churn), then ML-1+ML-6 together (shutdown cleanup), then ML-3+ML-4 (polish).
+
+---
+
 ## Measurement Protocol
 
-1. **Baseline:** Select 3 representative titles. Record 60-second Tracy captures at fixed scenes. Extract: mean/P99 frame time, GPU active time, VRAM usage, draw calls/frame.
-2. **Per-change:** Apply single optimization, re-record identical captures. Reject if P99 regresses >5%.
-3. **Validation:** Zero new Vulkan validation errors. Synchronization validation for barrier changes.
-4. **Regression:** 10+ titles through boot + first interactive scene. Automated screenshot diff where available.
-5. **Memory:** 30-minute play session with VRAM monitoring after GC fix.
+1. **Baseline:** Bloodborne. Record 60-second Tracy captures in Central Yharnam. Extract: mean/P99 frame time, GPU active time, VRAM usage (via `VK_EXT_memory_budget` if available), draw calls/frame.
+2. **Memory baseline:** 30-minute session, sample VRAM every 60 seconds. Establish growth rate before any fix.
+3. **Per-change:** Apply single fix, re-record identical captures. Reject if P99 regresses >5%.
+4. **Validation:** Zero new Vulkan validation errors (`VK_LAYER_KHRONOS_validation`). Synchronization validation for barrier changes.
+5. **Regression:** Boot + first interactive scene. Watch for texture corruption, especially after scene transitions (ML-5 area).
+6. **Memory verification:** After ML-2 fix, confirm VRAM stabilizes within 5 minutes of play (no monotonic growth).
