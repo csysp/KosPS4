@@ -3,7 +3,12 @@
 
 #pragma once
 
+#include <condition_variable>
+#include <mutex>
+#include <queue>
+#include <thread>
 #include <variant>
+#include <vector>
 #include <tsl/robin_map.h>
 #include "shader_recompiler/profile.h"
 #include "shader_recompiler/recompiler.h"
@@ -62,8 +67,10 @@ struct Program {
 
     void InsertPermut(vk::ShaderModule module, Shader::StageSpecialization&& spec,
                       size_t perm_idx) {
+        ASSERT(perm_idx < MaxPermutations);
         const u64 hash = spec.Hash(); // compute before move
-        modules.resize(std::max(modules.size(), perm_idx + 1)); // <-- beware of realloc
+        modules.reserve(MaxPermutations);
+        modules.resize(std::max(modules.size(), perm_idx + 1));
         modules[perm_idx] = {module, std::move(spec), hash};
         perm_map.insert_or_assign(hash, static_cast<u8>(perm_idx));
     }
@@ -102,6 +109,40 @@ public:
     }
 
 private:
+    // -- Async pipeline compilation --
+
+    /// Job captured on the render thread; compiled on a background thread.
+    struct AsyncGraphicsJob {
+        GraphicsPipelineKey key;
+        std::array<const Shader::Info*, MaxShaderStages> infos;
+        std::array<Shader::RuntimeInfo, MaxShaderStages> runtime_infos;
+        std::array<vk::ShaderModule, MaxShaderStages> modules;
+        std::optional<Shader::Gcn::FetchShaderData> fetch_shader;
+    };
+    struct AsyncComputeJob {
+        ComputePipelineKey key;
+        const Shader::Info* info;
+        vk::ShaderModule module;
+    };
+    using AsyncJob = std::variant<AsyncGraphicsJob, AsyncComputeJob>;
+
+    /// Compiled pipeline posted back from a compile thread to the render thread.
+    struct CompletedGraphics {
+        GraphicsPipelineKey key;
+        std::unique_ptr<GraphicsPipeline> pipeline;
+        GraphicsPipeline::SerializationSupport sdata;
+    };
+    struct CompletedCompute {
+        ComputePipelineKey key;
+        std::unique_ptr<ComputePipeline> pipeline;
+        ComputePipeline::SerializationSupport sdata;
+    };
+
+    /// Drain completed async pipelines into the pipeline maps (render thread only).
+    void FlushCompletedPipelines();
+    /// Thread function for background compile workers.
+    void CompileThreadFunc(std::stop_token stop);
+
     bool RefreshGraphicsKey();
     bool RefreshGraphicsStages();
     bool RefreshComputeKey();
@@ -146,6 +187,22 @@ private:
     tsl::robin_map<vk::ShaderModule,
                    std::vector<std::variant<GraphicsPipelineKey, ComputePipelineKey>>>
         module_related_pipelines;
+
+    // Async compilation (render-thread-only maps, no lock needed)
+    tsl::robin_map<GraphicsPipelineKey, u8> enqueued_graphics;
+    tsl::robin_map<ComputePipelineKey, u8> enqueued_compute;
+
+    // Job queue shared between render thread (producer) and compile threads (consumers)
+    std::mutex job_mutex;
+    std::condition_variable_any job_cv;
+    std::queue<AsyncJob> job_queue;
+
+    // Result queue: compile threads produce, render thread consumes in FlushCompletedPipelines
+    std::mutex result_mutex;
+    std::vector<CompletedGraphics> completed_graphics;
+    std::vector<CompletedCompute> completed_compute;
+
+    std::vector<std::jthread> compile_threads;
 };
 
 } // namespace Vulkan
