@@ -7,6 +7,13 @@
 template <typename T, size_t N, int INVALID_OBJECT_ID_ERROR, int OBJECT_NOT_FOUND_ERROR,
           int MAX_OBJECTS_ERROR>
 struct ObjectManager {
+    ~ObjectManager() {
+        std::scoped_lock lk{mutex};
+        for (auto* obj : objects) {
+            delete obj;
+        }
+    }
+
     s32 GetObject(int objectId, T** out) {
         std::scoped_lock lk{mutex};
         if (objectId < 1 || objectId > N) {

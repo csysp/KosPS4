@@ -32,6 +32,7 @@ class PageManager;
 
 class TextureCache {
     // Default values for garbage collection
+    static constexpr s64 DEFAULT_TRIGGER_GC_MEMORY = 768_MB;
     static constexpr s64 DEFAULT_PRESSURE_GC_MEMORY = 1_GB + 512_MB;
     static constexpr s64 DEFAULT_CRITICAL_GC_MEMORY = 3_GB;
     static constexpr s64 TARGET_GC_THRESHOLD = 8_GB;

@@ -222,7 +222,7 @@ for (const auto& [_, program] : program_cache) {
 }
 ```
 
-**Status:** Not started
+**Status:** Done
 
 ---
 
@@ -238,7 +238,7 @@ More critically, when the driver *does* support `memory_budget`, `GetDeviceMemor
 
 **Fix:** Add a fallback estimator: when `CanReportMemoryUsage()` is false, use `total_used_memory` (the `guest_size`-accumulated counter) rather than replacing it with 0 at the check site.
 
-**Status:** Not started
+**Status:** Done — `trigger_gc_memory` now set to `DEFAULT_TRIGGER_GC_MEMORY` (768 MB) in the no-`memory_budget` path. Added named constant to `texture_cache.h`.
 
 ---
 
@@ -255,7 +255,7 @@ if (image_ids.empty()) {
 }
 ```
 
-**Status:** Not started
+**Status:** Done
 
 ---
 
@@ -269,7 +269,7 @@ if (image_ids.empty()) {
 
 **Fix:** This is fundamentally tied to fixing ML-2 (ensuring GC runs). Additionally, consider a `surface_metas.max_load_factor(0.5)` or periodic sweep to remove entries whose associated image no longer exists.
 
-**Status:** Blocked on ML-2
+**Status:** Unblocked (ML-2 done) — not yet implemented
 
 ---
 
@@ -292,7 +292,7 @@ for (const ImageId id : deleted_images) {
 }
 ```
 
-**Status:** Not started
+**Status:** Done — `DownloadImageMemory(id)` called unconditionally before `FreeImage` (the function already guards on `GpuModified` internally).
 
 ---
 
@@ -312,7 +312,7 @@ for (const ImageId id : deleted_images) {
 }
 ```
 
-**Status:** Not started
+**Status:** Done
 
 ---
 
@@ -320,12 +320,12 @@ for (const ImageId id : deleted_images) {
 
 | # | Issue | File(s) | Type | Impact | Effort | Status |
 |---|-------|---------|------|--------|--------|--------|
-| ML-1 | ShaderModule handles not destroyed | `vk_pipeline_cache.cpp:295` | Shutdown leak | Low (VK validation) | ~8 lines | Not started |
-| ML-2 | Texture GC trigger logic broken | `texture_cache.cpp:35,972` | Logic bug → no GC | High (VRAM growth) | ~10 lines | Not started |
-| ML-3 | Page table vector capacity not trimmed | `texture_cache.cpp:831,853` | Heap fragmentation | Medium | ~3 lines | Not started |
-| ML-4 | `surface_metas` grows without GC | `texture_cache.cpp:670` | Unbounded map | Medium | Blocked on ML-2 | Not started |
-| ML-5 | `UnmapMemory` drops dirty image data | `texture_cache.cpp:197` | Correctness + churn | High (visual bugs) | ~10 lines | Not started |
-| ML-6 | `ObjectManager` no destructor | `object_manager.h:28` | Shutdown leak | Low (NP libs) | ~5 lines | Not started |
+| ML-1 | ShaderModule handles not destroyed | `vk_pipeline_cache.cpp:295` | Shutdown leak | Low (VK validation) | ~8 lines | Done |
+| ML-2 | Texture GC trigger logic broken | `texture_cache.cpp:35,972` | Logic bug → no GC | High (VRAM growth) | ~10 lines | Done |
+| ML-3 | Page table vector capacity not trimmed | `texture_cache.cpp:831,853` | Heap fragmentation | Medium | ~3 lines | Done |
+| ML-4 | `surface_metas` grows without GC | `texture_cache.cpp:670` | Unbounded map | Medium | ~20 lines | Not started |
+| ML-5 | `UnmapMemory` drops dirty image data | `texture_cache.cpp:197` | Correctness + churn | High (visual bugs) | ~10 lines | Done |
+| ML-6 | `ObjectManager` no destructor | `object_manager.h:28` | Shutdown leak | Low (NP libs) | ~5 lines | Done |
 
 **Suggested order:** ML-2 first (gates ML-4, fixes VRAM growth), then ML-5 (correctness, reduces image churn), then ML-1+ML-6 together (shutdown cleanup), then ML-3+ML-4 (polish).
 

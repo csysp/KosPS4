@@ -33,7 +33,10 @@ TextureCache::TextureCache(const Vulkan::Instance& instance_, Vulkan::Scheduler&
 
     // Set up garbage collection parameters.
     if (!instance.CanReportMemoryUsage()) {
-        trigger_gc_memory = 0;
+        // Driver does not support VK_EXT_memory_budget. total_used_memory is accumulated
+        // from guest_size estimates. Set a non-zero trigger so GC is demand-driven rather
+        // than firing every frame (trigger_gc_memory=0 would make u64 < 0 always false).
+        trigger_gc_memory = DEFAULT_TRIGGER_GC_MEMORY;
         pressure_gc_memory = DEFAULT_PRESSURE_GC_MEMORY;
         critical_gc_memory = DEFAULT_CRITICAL_GC_MEMORY;
         return;
@@ -194,7 +197,7 @@ void TextureCache::UnmapMemory(VAddr cpu_addr, size_t size) {
     ImageIds deleted_images;
     ForEachImageInRegion(cpu_addr, size, [&](ImageId id, Image&) { deleted_images.push_back(id); });
     for (const ImageId id : deleted_images) {
-        // TODO: Download image data back to host.
+        DownloadImageMemory(id);
         FreeImage(id);
     }
 }
@@ -851,6 +854,9 @@ void TextureCache::UnregisterImage(ImageId image_id) {
             return;
         }
         image_ids.erase(vector_it);
+        if (image_ids.empty()) {
+            image_ids.shrink_to_fit();
+        }
     });
 }
 

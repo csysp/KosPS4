@@ -301,6 +301,16 @@ PipelineCache::~PipelineCache() {
     job_cv.notify_all();
     // jthread destructors join here.
     compile_threads.clear();
+
+    // Destroy shader modules that were never transferred to a pipeline.
+    const auto& device = instance.GetDevice();
+    for (const auto& [_, program] : program_cache) {
+        for (const auto& m : program->modules) {
+            if (m.module) {
+                device.destroyShaderModule(m.module);
+            }
+        }
+    }
 }
 
 void PipelineCache::FlushCompletedPipelines() {
