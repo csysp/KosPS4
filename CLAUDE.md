@@ -40,7 +40,7 @@ The `RunGarbageCollector()` function defines a `clean_up` lambda (line 854) that
 lru_cache.ForEachItemBelow(gc_tick - ticks_to_destroy, clean_up);
 ```
 
-**Status:** Not started
+**Status:** Done
 
 ---
 
@@ -166,7 +166,7 @@ Pipeline compilation (`vkCreateGraphicsPipelines` / `vkCreateComputePipelines`) 
 
 | # | Issue | File(s) | Risk | Impact | Effort | Status |
 |---|-------|---------|------|--------|--------|--------|
-| 0.1 | Dead GC (memory leak bug) | `buffer_cache.cpp:841` | Very Low | Critical | 1 line | Not started |
+| 0.1 | Dead GC (memory leak bug) | `buffer_cache.cpp:841` | Very Low | Critical | 1 line | Done |
 | 1.1 | O(n) vertex buffer lookup | `buffer_cache.cpp:223` | Very Low | Medium-High | 3 lines | Not started |
 | 2.1 | Broad pipeline barriers | `buffer_cache.cpp:326,659` | Medium | High | ~20 lines | Not started |
 | 2.2 | Duplicate FindImage calls | `vk_rasterizer.cpp:679` | Medium | Medium | ~15 lines | Not started |
