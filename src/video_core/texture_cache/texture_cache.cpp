@@ -131,9 +131,14 @@ void TextureCache::DownloadImageMemory(ImageId image_id) {
 
 void TextureCache::MarkAsMaybeDirty(ImageId image_id, Image& image) {
     if (image.hash == 0) {
-        // Initialize hash
+        // Initialize using the same subset as RefreshImage so the first RefreshImage call
+        // correctly detects "no change" and avoids a spurious GPU upload.
         const u8* addr = std::bit_cast<u8*>(image.info.guest_address);
-        image.hash = XXH3_64bits(addr, image.info.guest_size);
+        const u32 sw = std::min(image.info.size.width, u32(8));
+        const u32 sh = std::min(image.info.size.height, u32(8));
+        const u32 size = sw * sh * image.info.num_bits >> (3 + image.info.props.is_block ? 4 : 0);
+        const u64 init_hash = XXH3_64bits(addr, size);
+        image.hash = init_hash != 0 ? init_hash : 1ull; // guarantee non-zero
     }
     image.flags |= ImageFlagBits::MaybeCpuDirty;
     UntrackImage(image_id);

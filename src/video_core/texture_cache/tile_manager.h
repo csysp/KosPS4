@@ -15,10 +15,17 @@ class StreamBuffer;
 
 class TileManager {
     static constexpr size_t NUM_BPPS = 5;
+    static constexpr size_t MaxScratchPoolSize = 4;
 
 public:
     using ScratchBuffer = std::pair<vk::Buffer, VmaAllocation>;
     using Result = std::pair<vk::Buffer, u32>;
+
+    struct PoolEntry {
+        VkBuffer buffer;
+        VmaAllocation allocation;
+        u32 capacity;
+    };
 
     explicit TileManager(const Vulkan::Instance& instance, Vulkan::Scheduler& scheduler,
                          StreamBuffer& stream_buffer);
@@ -41,6 +48,7 @@ private:
     vk::UniquePipelineLayout pl_layout;
     std::array<vk::UniquePipeline, AmdGpu::NUM_TILE_MODES * NUM_BPPS> detilers{};
     std::array<vk::UniquePipeline, AmdGpu::NUM_TILE_MODES * NUM_BPPS> tilers{};
+    std::vector<PoolEntry> scratch_pool; // recycled detile/tile scratch buffers
 };
 
 } // namespace VideoCore

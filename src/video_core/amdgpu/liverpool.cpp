@@ -110,7 +110,17 @@ void Liverpool::Process(std::stop_token stoken) {
         while (num_submits || num_commands) {
             ProcessCommands();
 
-            curr_qid = (curr_qid + 1) % num_mapped_queues;
+            // Only visit queues that have pending work. The bitmask avoids taking
+            // queue.m_access on all NumTotalQueues slots each iteration.
+            const u64 mask = active_queue_mask.load(std::memory_order_relaxed);
+            if (mask == 0) {
+                continue;
+            }
+            // Advance round-robin from curr_qid+1, wrapping back to the lowest set bit.
+            const u32 next_start = static_cast<u32>(curr_qid + 1);
+            const u64 tail = (next_start < 64u) ? (mask >> next_start) : 0u;
+            curr_qid = tail ? static_cast<s32>(next_start + std::countr_zero(tail))
+                            : static_cast<s32>(std::countr_zero(mask));
 
             auto& queue = mapped_queues[curr_qid];
 
@@ -118,6 +128,9 @@ void Liverpool::Process(std::stop_token stoken) {
             {
                 std::scoped_lock lock{queue.m_access};
                 if (queue.submits.empty()) {
+                    // Stale bit: queue drained between mask load and lock acquire.
+                    active_queue_mask.fetch_and(~(1ULL << curr_qid),
+                                                std::memory_order_relaxed);
                     continue;
                 }
                 task = queue.submits.front();
@@ -127,12 +140,27 @@ void Liverpool::Process(std::stop_token stoken) {
             if (task.done()) {
                 task.destroy();
 
-                std::scoped_lock lock{queue.m_access};
-                queue.submits.pop();
+                {
+                    std::scoped_lock lock{queue.m_access};
+                    queue.submits.pop();
+                    if (queue.submits.empty()) {
+                        active_queue_mask.fetch_and(~(1ULL << curr_qid),
+                                                    std::memory_order_relaxed);
+                    }
+                }
 
                 --num_submits;
+                // notify_one is sufficient: only the single submit waiter needs waking.
                 std::scoped_lock lock2{submit_mutex};
-                submit_cv.notify_all();
+                submit_cv.notify_one();
+            }
+
+            // GFX queue (bit 0) has highest priority. After any compute task slice, if GFX
+            // has pending work let it run next. This reflects GCN's hardware priority model
+            // and ensures the main render pipeline isn't starved by async compute queues.
+            if (curr_qid != static_cast<s32>(GfxQueueId) &&
+                (active_queue_mask.load(std::memory_order_relaxed) & 1u)) {
+                curr_qid = -1; // next_start=0 → bitmask scan picks bit 0 (GFX)
             }
         }
 
@@ -153,7 +181,9 @@ Liverpool::Task Liverpool::ProcessCeUpdate(std::span<const u32> ccb) {
     FIBER_ENTER(ccb_task_name);
 
     while (!ccb.empty()) {
-        ProcessCommands();
+        if (num_commands) {
+            ProcessCommands();
+        }
 
         const auto* header = reinterpret_cast<const PM4Header*>(ccb.data());
         const u32 type = header->type;
@@ -234,7 +264,9 @@ Liverpool::Task Liverpool::ProcessGraphics(std::span<const u32> dcb, std::span<c
 
     const auto base_addr = reinterpret_cast<uintptr_t>(dcb.data());
     while (!dcb.empty()) {
-        ProcessCommands();
+        if (num_commands) {
+            ProcessCommands();
+        }
 
         const auto* header = reinterpret_cast<const PM4Header*>(dcb.data());
         const u32 type = header->type;
@@ -303,6 +335,8 @@ Liverpool::Task Liverpool::ProcessGraphics(std::span<const u32> dcb, std::span<c
                 break;
             }
             case PM4ItOpcode::ClearState: {
+                graphics_dirty = true;
+                compute_dirty = true;
                 regs.SetDefaults();
                 break;
             }
@@ -314,6 +348,7 @@ Liverpool::Task Liverpool::ProcessGraphics(std::span<const u32> dcb, std::span<c
                 break;
             }
             case PM4ItOpcode::SetContextReg: {
+                graphics_dirty = true;
                 const auto* set_data = reinterpret_cast<const PM4CmdSetData*>(header);
                 const auto reg_addr = Regs::ContextRegWordOffset + set_data->reg_offset;
                 const auto* payload = reinterpret_cast<const u32*>(header + 2);
@@ -387,6 +422,8 @@ Liverpool::Task Liverpool::ProcessGraphics(std::span<const u32> dcb, std::span<c
                 break;
             }
             case PM4ItOpcode::SetShReg: {
+                graphics_dirty = true;
+                compute_dirty = true;
                 const auto* set_data = reinterpret_cast<const PM4CmdSetData*>(header);
                 const auto set_size = (count - 1) * sizeof(u32);
 
@@ -403,6 +440,7 @@ Liverpool::Task Liverpool::ProcessGraphics(std::span<const u32> dcb, std::span<c
                 break;
             }
             case PM4ItOpcode::SetUconfigReg: {
+                graphics_dirty = true;
                 const auto* set_data = reinterpret_cast<const PM4CmdSetData*>(header);
                 std::memcpy(&regs.reg_array[Regs::UconfigRegWordOffset + set_data->reg_offset],
                             header + 2, (count - 1) * sizeof(u32));
@@ -910,7 +948,9 @@ Liverpool::Task Liverpool::ProcessCompute(std::span<const u32> acb, u32 vqid) {
     auto base_addr = reinterpret_cast<VAddr>(acb.data());
     size_t acb_size = acb.size_bytes();
     while (!acb.empty()) {
-        ProcessCommands();
+        if (num_commands) {
+            ProcessCommands();
+        }
 
         auto* header = reinterpret_cast<const PM4Header*>(acb.data());
         u32 next_dw_off = header->type3.NumWords() + 1;
@@ -1213,6 +1253,7 @@ void Liverpool::SubmitGfx(std::span<const u32> dcb, std::span<const u32> ccb) {
     }
 
     std::scoped_lock lk{submit_mutex};
+    active_queue_mask.fetch_or(1ULL << GfxQueueId, std::memory_order_relaxed);
     ++num_submits;
     submit_cv.notify_one();
 }
@@ -1229,6 +1270,7 @@ void Liverpool::SubmitAsc(u32 gnm_vqid, std::span<const u32> acb) {
     }
 
     std::scoped_lock lk{submit_mutex};
+    active_queue_mask.fetch_or(1ULL << gnm_vqid, std::memory_order_relaxed);
     num_mapped_queues = std::max(num_mapped_queues, gnm_vqid + 1);
     ++num_submits;
     submit_cv.notify_one();

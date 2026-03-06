@@ -3,6 +3,7 @@
 
 #pragma once
 
+#include <bit>
 #include <condition_variable>
 #include <coroutine>
 #include <exception>
@@ -132,6 +133,17 @@ public:
         return mapped_queues[curr_qid].cs_state;
     }
 
+    // Consume the graphics pipeline dirty flag. Returns true if state changed since last consume.
+    // Both set and consumed exclusively on the GPU command-processor thread — no atomics needed.
+    bool ConsumeGraphicsDirty() noexcept {
+        return std::exchange(graphics_dirty, false);
+    }
+
+    // Consume the compute pipeline dirty flag.
+    bool ConsumeComputeDirty() noexcept {
+        return std::exchange(compute_dirty, false);
+    }
+
     struct AscQueueInfo {
         static constexpr size_t Pm4BufferSize = 1024;
         VAddr map_addr;
@@ -231,6 +243,14 @@ private:
     std::queue<Common::UniqueFunction<void>> command_queue{};
     std::thread::id gpu_id;
     s32 curr_qid{-1};
+    // Bitmask of queues that have pending submits. Bit i corresponds to mapped_queues[i].
+    // Avoids iterating all NumTotalQueues slots when only a few are active.
+    // Accessed only on the GPU thread and submit paths (with submit_mutex held for writes).
+    std::atomic<u64> active_queue_mask{1u}; // bit 0 = GFX always considered live
+    // Pipeline dirty flags — set by PM4 state-write opcodes, consumed by PipelineCache.
+    // Both accessed exclusively on the GPU command-processor thread.
+    bool graphics_dirty{true};
+    bool compute_dirty{true};
 };
 
 } // namespace AmdGpu

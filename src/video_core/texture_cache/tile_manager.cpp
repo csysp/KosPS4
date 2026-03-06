@@ -73,9 +73,23 @@ TileManager::TileManager(const Vulkan::Instance& instance, Vulkan::Scheduler& sc
     pl_layout = std::move(layout);
 }
 
-TileManager::~TileManager() = default;
+TileManager::~TileManager() {
+    for (const auto& entry : scratch_pool) {
+        vmaDestroyBuffer(instance.GetAllocator(), entry.buffer, entry.allocation);
+    }
+}
 
 TileManager::ScratchBuffer TileManager::GetScratchBuffer(u32 size) {
+    // Check pool for a buffer large enough to reuse.
+    for (size_t i = 0; i < scratch_pool.size(); ++i) {
+        if (scratch_pool[i].capacity >= size) {
+            const auto entry = scratch_pool[i];
+            scratch_pool[i] = scratch_pool.back();
+            scratch_pool.pop_back();
+            return {entry.buffer, entry.allocation};
+        }
+    }
+
     constexpr auto usage =
         vk::BufferUsageFlagBits::eUniformBuffer | vk::BufferUsageFlagBits::eStorageBuffer |
         vk::BufferUsageFlagBits::eTransferSrc | vk::BufferUsageFlagBits::eTransferDst;
@@ -187,8 +201,13 @@ TileManager::Result TileManager::DetileImage(vk::Buffer in_buffer, u32 in_offset
     };
 
     const auto [out_buffer, out_allocation] = GetScratchBuffer(info.guest_size);
-    scheduler.DeferOperation([this, out_buffer, out_allocation]() {
-        vmaDestroyBuffer(instance.GetAllocator(), out_buffer, out_allocation);
+    const u32 buf_capacity = info.guest_size;
+    scheduler.DeferOperation([this, out_buffer, out_allocation, buf_capacity]() {
+        if (scratch_pool.size() < MaxScratchPoolSize) {
+            scratch_pool.push_back({out_buffer, out_allocation, buf_capacity});
+        } else {
+            vmaDestroyBuffer(instance.GetAllocator(), out_buffer, out_allocation);
+        }
     });
 
     scheduler.EndRendering();
@@ -272,8 +291,13 @@ void TileManager::TileImage(Image& in_image, std::span<vk::BufferImageCopy> buff
     };
 
     const auto [temp_buffer, temp_allocation] = GetScratchBuffer(info.guest_size);
-    scheduler.DeferOperation([this, temp_buffer, temp_allocation]() {
-        vmaDestroyBuffer(instance.GetAllocator(), temp_buffer, temp_allocation);
+    const u32 buf_capacity = info.guest_size;
+    scheduler.DeferOperation([this, temp_buffer, temp_allocation, buf_capacity]() {
+        if (scratch_pool.size() < MaxScratchPoolSize) {
+            scratch_pool.push_back({temp_buffer, temp_allocation, buf_capacity});
+        } else {
+            vmaDestroyBuffer(instance.GetAllocator(), temp_buffer, temp_allocation);
+        }
     });
 
     const auto cmdbuf = scheduler.CommandBuffer();

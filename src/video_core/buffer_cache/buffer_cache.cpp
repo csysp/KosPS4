@@ -82,6 +82,11 @@ void BufferCache::InvalidateMemory(VAddr device_addr, u64 size) {
 }
 
 void BufferCache::ReadMemory(VAddr device_addr, u64 size, bool is_write) {
+    // Avoid blocking the CPU fault handler on a GPU round-trip when no GPU-modified
+    // pages exist in this range. DownloadBufferMemory would be a no-op anyway.
+    if (!IsRegionGpuModified(device_addr, size)) {
+        return;
+    }
     liverpool->SendCommand<true>([this, device_addr, size, is_write] {
         Buffer& buffer = slot_buffers[FindBuffer(device_addr, size)];
         DownloadBufferMemory<false>(buffer, device_addr, size, is_write);

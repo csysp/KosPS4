@@ -4,7 +4,9 @@
 #pragma once
 
 #include <bitset>
+#include <xxhash.h>
 
+#include "common/hash.h"
 #include "common/types.h"
 #include "shader_recompiler/backend/bindings.h"
 #include "shader_recompiler/frontend/fetch_shader.h"
@@ -248,6 +250,52 @@ struct StageSpecialization {
             }
         }
         return true;
+    }
+
+    // Hash consistent with operator==. All member structs are value-initialized (zero padding),
+    // and RuntimeInfo is zeroed via memset — raw byte hashing is safe on the hot path.
+    [[nodiscard]] u64 Hash() const {
+        XXH3_state_t state;
+        XXH3_64bits_reset(&state);
+        XXH3_64bits_update(&state, &runtime_info, sizeof(runtime_info));
+        XXH3_64bits_update(&state, &start, sizeof(start));
+        const u64 bv = std::hash<std::bitset<MaxStageResources>>{}(bitset);
+        XXH3_64bits_update(&state, &bv, sizeof(bv));
+        if (!vs_attribs.empty()) {
+            XXH3_64bits_update(&state, vs_attribs.data(),
+                               vs_attribs.size() * sizeof(vs_attribs[0]));
+        }
+        if (!buffers.empty()) {
+            XXH3_64bits_update(&state, buffers.data(),
+                               buffers.size() * sizeof(buffers[0]));
+        }
+        if (!images.empty()) {
+            XXH3_64bits_update(&state, images.data(),
+                               images.size() * sizeof(images[0]));
+        }
+        if (!fmasks.empty()) {
+            XXH3_64bits_update(&state, fmasks.data(),
+                               fmasks.size() * sizeof(fmasks[0]));
+        }
+        if (!samplers.empty()) {
+            XXH3_64bits_update(&state, samplers.data(),
+                               samplers.size() * sizeof(samplers[0]));
+        }
+        if (fetch_shader_data) {
+            const auto& fsd = *fetch_shader_data;
+            XXH3_64bits_update(&state, &fsd.vertex_offset_sgpr,
+                               sizeof(fsd.vertex_offset_sgpr));
+            XXH3_64bits_update(&state, &fsd.instance_offset_sgpr,
+                               sizeof(fsd.instance_offset_sgpr));
+            for (const auto& attr : fsd.attributes) {
+                // Hash only the 6 fields compared by VertexAttribute::operator==
+                const u64 ak = u64(attr.semantic) | (u64(attr.dest_vgpr) << 8) |
+                               (u64(attr.num_elements) << 16) | (u64(attr.sgpr_base) << 24) |
+                               (u64(attr.dword_offset) << 32) | (u64(attr.instance_data) << 40);
+                XXH3_64bits_update(&state, &ak, sizeof(ak));
+            }
+        }
+        return XXH3_64bits_digest(&state);
     }
 
     void Serialize(Serialization::Archive& ar) const;

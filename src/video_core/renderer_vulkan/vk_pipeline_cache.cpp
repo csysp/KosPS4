@@ -338,6 +338,11 @@ const ComputePipeline* PipelineCache::GetComputePipeline() {
 }
 
 bool PipelineCache::RefreshGraphicsKey() {
+    // Fast path: no GPU state changed since last draw — reuse cached key and shader infos.
+    if (!liverpool->ConsumeGraphicsDirty()) {
+        return graphics_key_valid;
+    }
+    graphics_key_valid = false;
     std::memset(&graphics_key, 0, sizeof(GraphicsPipelineKey));
     const auto& regs = liverpool->regs;
     auto& key = graphics_key;
@@ -427,6 +432,7 @@ bool PipelineCache::RefreshGraphicsKey() {
         }
     }
 
+    graphics_key_valid = true;
     return true;
 }
 
@@ -532,6 +538,10 @@ bool PipelineCache::RefreshGraphicsStages() {
 }
 
 bool PipelineCache::RefreshComputeKey() {
+    // Fast path: compute state unchanged since last dispatch — reuse cached key.
+    if (!liverpool->ConsumeComputeDirty()) {
+        return true;
+    }
     Shader::Backend::Bindings binding{};
     const auto& cs_pgm = liverpool->GetCsRegs();
     const auto cs_params = AmdGpu::GetParams(cs_pgm);
@@ -603,6 +613,23 @@ PipelineCache::Result PipelineCache::GetProgram(Stage stage, LogicalStage l_stag
     u64 perm_hash = HashCombine(params.hash, perm_idx);
 
     vk::ShaderModule module{};
+
+    // O(1) hash map lookup — avoids per-draw StageSpecialization::operator== traversal.
+    // Falls back to linear scan only on hash collision (exceedingly rare).
+    const u64 spec_hash = spec.Hash();
+    const auto map_it = program->perm_map.find(spec_hash);
+    if (map_it != program->perm_map.end()) {
+        const u8 candidate_idx = map_it->second;
+        const auto& candidate = program->modules[candidate_idx];
+        if (candidate.spec == spec) { // collision guard
+            info.AddBindings(binding);
+            perm_idx = candidate_idx;
+            perm_hash = HashCombine(params.hash, perm_idx);
+            return std::make_tuple(&program->info, candidate.module,
+                                   candidate.spec.fetch_shader_data, perm_hash);
+        }
+        // Hash collision — fall through to linear scan
+    }
 
     const auto it = std::ranges::find(program->modules, spec, &Program::Module::spec);
     if (it == program->modules.end()) {

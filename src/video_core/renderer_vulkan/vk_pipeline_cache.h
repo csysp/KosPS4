@@ -41,25 +41,31 @@ struct Program {
     struct Module {
         vk::ShaderModule module;
         Shader::StageSpecialization spec;
+        u64 spec_hash{};
     };
     static constexpr size_t MaxPermutations = 8;
     using ModuleList = boost::container::small_vector<Module, MaxPermutations>;
 
     Shader::Info info;
     ModuleList modules{};
+    tsl::robin_map<u64, u8> perm_map; // spec_hash -> permutation index for O(1) lookup
 
     Program() = default;
     Program(Shader::Stage stage, Shader::LogicalStage l_stage, Shader::ShaderParams params)
         : info{stage, l_stage, params} {}
 
     void AddPermut(vk::ShaderModule module, Shader::StageSpecialization&& spec) {
-        modules.emplace_back(module, std::move(spec));
+        const u64 hash = spec.Hash(); // compute before move
+        perm_map.emplace(hash, static_cast<u8>(modules.size()));
+        modules.emplace_back(module, std::move(spec), hash);
     }
 
     void InsertPermut(vk::ShaderModule module, Shader::StageSpecialization&& spec,
                       size_t perm_idx) {
+        const u64 hash = spec.Hash(); // compute before move
         modules.resize(std::max(modules.size(), perm_idx + 1)); // <-- beware of realloc
-        modules[perm_idx] = {module, std::move(spec)};
+        modules[perm_idx] = {module, std::move(spec), hash};
+        perm_map.insert_or_assign(hash, static_cast<u8>(perm_idx));
     }
 };
 
@@ -131,6 +137,9 @@ private:
     std::optional<Shader::Gcn::FetchShaderData> fetch_shader{};
     GraphicsPipelineKey graphics_key{};
     ComputePipelineKey compute_key{};
+    // True when graphics_key and infos[]/modules[] are valid for the current GPU state.
+    // Set false on any graphics register change; set true after a successful RefreshGraphicsKey.
+    bool graphics_key_valid{false};
     u32 num_new_pipelines{}; // new pipelines added to the cache since the game start
 
     // Only if Config::collectShadersForDebug()
