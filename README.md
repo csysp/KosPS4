@@ -3,6 +3,8 @@ SPDX-FileCopyrightText: 2026 shadPS4 Emulator Project
 SPDX-License-Identifier: GPL-2.0-or-later
 -->
 
+# <p align="center">KosPS4 Emulator</p>
+
 <h1 align="center">
  <a href="https://discord.gg/bFJxfftGW6">
         <img src="https://img.shields.io/discord/1080089157554155590?color=5865F2&label=shadPS4%20Discord&logo=Discord&logoColor=white" width="275">
