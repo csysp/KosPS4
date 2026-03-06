@@ -140,6 +140,18 @@ public:
     [[nodiscard]] vk::Sampler GetSampler(const AmdGpu::Sampler& sampler,
                                          AmdGpu::BorderColorBuffer border_color_base);
 
+    /// Returns the current draw's bind generation (used for O(1) is_bound/is_target checks).
+    [[nodiscard]] u32 BindGeneration() const noexcept {
+        return bind_generation;
+    }
+
+    /// Advances the bind generation, implicitly clearing all is_bound/is_target state in O(1).
+    void AdvanceBindGeneration() noexcept {
+        if (++bind_generation == 0) {
+            ++bind_generation; // skip 0; 0 means "never bound"
+        }
+    }
+
     /// Retrieves the image with the specified id.
     [[nodiscard]] Image& GetImage(ImageId id) {
         auto& image = slot_images[id];
@@ -324,6 +336,7 @@ private:
         s32 clear_mask = -1;
     };
     tsl::robin_map<VAddr, MetaDataInfo> surface_metas;
+    u32 bind_generation{1}; ///< Incremented each draw; used for O(1) is_bound/is_target queries
 };
 
 } // namespace VideoCore

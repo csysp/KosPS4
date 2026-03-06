@@ -104,9 +104,7 @@ private:
     bool BindResources(const Pipeline* pipeline);
 
     void ResetBindings() {
-        for (auto& image_id : bound_images) {
-            texture_cache.GetImage(image_id).binding = {};
-        }
+        texture_cache.AdvanceBindGeneration();
         bound_images.clear();
     }
 

@@ -180,8 +180,8 @@ public:
     } usage{};
 
     struct {
-        u32 is_bound : 1;
-        u32 is_target : 1;
+        u32 bind_gen;       ///< Non-zero when bound as texture; matches TextureCache::bind_generation
+        u32 target_gen;     ///< Non-zero when bound as render target; matches TextureCache::bind_generation
         u32 needs_rebind : 1;
         u32 force_general : 1;
     } binding{};

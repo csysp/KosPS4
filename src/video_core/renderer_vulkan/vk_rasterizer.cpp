@@ -128,7 +128,7 @@ void Rasterizer::PrepareRenderState(const GraphicsPipeline* pipeline) {
         std::construct_at(&desc, col_buf, hint);
         image_id = bound_images.emplace_back(texture_cache.FindImage(desc));
         auto& image = texture_cache.GetImage(image_id);
-        image.binding.is_target = 1u;
+        image.binding.target_gen = texture_cache.BindGeneration();
     }
 
     if ((regs.depth_control.depth_enable && regs.depth_buffer.DepthValid()) ||
@@ -140,7 +140,7 @@ void Rasterizer::PrepareRenderState(const GraphicsPipeline* pipeline) {
                           htile_address, hint);
         image_id = bound_images.emplace_back(texture_cache.FindImage(desc));
         auto& image = texture_cache.GetImage(image_id);
-        image.binding.is_target = 1u;
+        image.binding.target_gen = texture_cache.BindGeneration();
     } else {
         db_desc.first = {};
     }
@@ -696,12 +696,15 @@ void Rasterizer::BindTextures(const Shader::Info& stage, Shader::Backend::Bindin
             image_id = image->depth_id;
             image = &texture_cache.GetImage(image_id);
         }
-        if (image->binding.is_bound) {
+        const u32 gen = texture_cache.BindGeneration();
+        if (image->binding.bind_gen == gen) {
             // The image is already bound. In case if it is about to be used as storage we need
             // to force general layout on it.
             image->binding.force_general |= image_desc.is_written;
+        } else {
+            image->binding.force_general = image_desc.is_written;
+            image->binding.bind_gen = gen;
         }
-        image->binding.is_bound = 1u;
     }
 
     // Second pass to re-bind images that were updated after binding
@@ -730,10 +733,11 @@ void Rasterizer::BindTextures(const Shader::Info& stage, Shader::Backend::Bindin
             // The image is either bound as storage in a separate descriptor or bound as render
             // target in feedback loop. Depth images are excluded because they can't be bound as
             // storage and feedback loop doesn't make sense for them
-            if ((image.binding.force_general || image.binding.is_target) &&
+            const bool is_target = image.binding.target_gen == texture_cache.BindGeneration();
+            if ((image.binding.force_general || is_target) &&
                 !image.info.props.is_depth) {
                 image.Transit(instance.IsAttachmentFeedbackLoopLayoutSupported() &&
-                                      image.binding.is_target
+                                      is_target
                                   ? vk::ImageLayout::eAttachmentFeedbackLoopOptimalEXT
                                   : vk::ImageLayout::eGeneral,
                               vk::AccessFlagBits2::eShaderRead |
@@ -823,7 +827,7 @@ RenderState Rasterizer::BeginRendering(const GraphicsPipeline* pipeline) {
         const bool is_clear = texture_cache.IsMetaCleared(col_buf.CmaskAddress(), slice);
         texture_cache.TouchMeta(col_buf.CmaskAddress(), slice, false);
 
-        if (image->binding.is_bound) {
+        if (image->binding.bind_gen == texture_cache.BindGeneration()) {
             ASSERT_MSG(!image->binding.force_general,
                        "Having image both as storage and render target is unsupported");
             image->Transit(instance.IsAttachmentFeedbackLoopLayoutSupported()
