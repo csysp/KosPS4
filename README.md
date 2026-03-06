@@ -12,31 +12,32 @@ SPDX-License-Identifier: GPL-2.0-or-later
         <img src="https://img.shields.io/badge/shadPS4-website-8A2BE2" width="150">
  <a href="https://x.com/shadps4">
         <img src="https://img.shields.io/badge/-Join%20us-black?logo=X&logoColor=white" width="100">
- <a href="https://github.com/shadps4-emu/shadPS4/stargazers">
-        <img src="https://img.shields.io/github/stars/shadps4-emu/shadPS4" width="120">
 </h1>
 
-# General information
+<p align="center">"Ahh, Kos...  
+or some say, Kosm...  
+Do you hear our prayers?      
+Grant us eyes, grant us eyes!"</p>
 
-**KosPS4** is an early Bloodborne optimized fork of the ShadPS4 v14.0 **PlayStation 4** emulator for **Windows**, **Linux** and **macOS** written in C++.
+### <p align="center">*— Micolash, Host of the Nightmare*</p>
+
+# General information
+**KosPS4** is an early Bloodborne optimized fork of the ShadPS4 v14.0 **PlayStation 4** emulator for **Windows**, **Linux** and **macOS** written in C++. Right now KosPS4 is Windows only.
+The goal is a stable "complete" 60fps 1080p+ experience with enhanced graphics architecture to integrate [**fromsoftserve's BB PC Remaster Mod**](https://www.nexusmods.com/bloodborne/mods/45) without bottlenecks.
 
 > [!IMPORTANT]
-> This is the emulator core, which does not include a GUI. If you just want to use the emulator as an end user, download the [**QtLauncher**](https://github.com/shadps4-emu/shadps4-qtlauncher/releases) instead.
+> This is the emulator core for use with BB Launcher, which does not include a GUI. If you just want to use the emulator as an end user, download the [**QtLauncher**](https://github.com/shadps4-emu/shadps4-qtlauncher/releases) instead.
 
-If you encounter problems or have doubts, do not hesitate to look at the [**Quickstart**](https://github.com/shadps4-emu/shadPS4/wiki/I.-Quick-start-%5BUsers%5D).\
-To verify that a game works, you can look at [**shadPS4 Game Compatibility**](https://github.com/shadps4-compatibility/shadps4-game-compatibility).\
-To discuss shadPS4 development, suggest ideas or to ask for help, join our [**Discord server**](https://discord.gg/bFJxfftGW6).\
-To get the latest news, go to our [**X (Twitter)**](https://x.com/shadps4) or our [**website**](https://shadps4.net/).\
-You can donate to the project via our [**Kofi page**](https://ko-fi.com/shadps4).
 
 # Status
 
 > [!IMPORTANT]
-> KosPS4 is early in development, don't expect a flawless experience.
+> KosPS4 is early in development, don't expect a flawless experience. As of 2026-03-06 the fork is functioning with reduced memory leaks and significant FPS stability improvements but there are many bugs and shader issues to be addressed in the coming commits.
 
 # Why
 
-This project began for fun. Given our limited free time, it may take some time before shadPS4 can run more complex games, but we're committed to making small, regular updates.
+After following the ShadPS4 project closely since release, I have felt there is an opportunity to create a personal fork that drills into performance and optimizations specifially around Bloodborne. 
+All credit goes to the ShadPS4 team of course, I am simply interested in creating the smoothest BB emulation experience possible.
 
 # Building (ShadPS4 Legacy Docs)
 
