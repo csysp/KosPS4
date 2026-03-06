@@ -4,14 +4,6 @@ SPDX-License-Identifier: GPL-2.0-or-later
 -->
 
 <h1 align="center">
-  <br>
-  <a href="https://shadps4.net/"><img src="https://github.com/shadps4-emu/shadPS4/blob/main/.github/shadps4.png" width="220"></a>
-  <br>
-  <b>shadPS4</b>
-  <br>
-</h1>
-
-<h1 align="center">
  <a href="https://discord.gg/bFJxfftGW6">
         <img src="https://img.shields.io/discord/1080089157554155590?color=5865F2&label=shadPS4%20Discord&logo=Discord&logoColor=white" width="275">
  <a href="https://github.com/shadps4-emu/shadPS4/releases/latest">
@@ -24,17 +16,9 @@ SPDX-License-Identifier: GPL-2.0-or-later
         <img src="https://img.shields.io/github/stars/shadps4-emu/shadPS4" width="120">
 </h1>
 
-|               Bloodborne by From Software                   |                     Hatsune Miku Project DIVA Future Tone by SEGA                         |
-| :-----------------------------------------------------------: | :--------------------------------------------------------------------------------------------: |
-| ![Bloodborne screenshot](./documents/Screenshots/1.png) | ![Project DIVA screenshot](./documents/Screenshots/2.png) |
-
-|                  Yakuza 0 by SEGA                     |                 DRIVECLUB™ by Evolution Studios                    |
-| :------------------------------------------------------------------------: | :------------------------------------------------------------------: |
-| ![Yakuza screenshot](./documents/Screenshots/3.png) | ![DRIVECLUB screenshot](./documents/Screenshots/4.png) |
-
 # General information
 
-**shadPS4** is an early **PlayStation 4** emulator for **Windows**, **Linux** and **macOS** written in C++.
+**KosPS4** is an early Bloodborne optimized fork of the ShadPS4 v14.0 **PlayStation 4** emulator for **Windows**, **Linux** and **macOS** written in C++.
 
 > [!IMPORTANT]
 > This is the emulator core, which does not include a GUI. If you just want to use the emulator as an end user, download the [**QtLauncher**](https://github.com/shadps4-emu/shadps4-qtlauncher/releases) instead.
@@ -48,15 +32,13 @@ You can donate to the project via our [**Kofi page**](https://ko-fi.com/shadps4)
 # Status
 
 > [!IMPORTANT]
-> shadPS4 is early in development, don't expect a flawless experience.
-
-Currently, the emulator can successfully run games like [**Bloodborne**](https://www.youtube.com/watch?v=5sZgWyVflFM), [**Dark Souls Remastered**](https://www.youtube.com/watch?v=-3PA-Xwszts), [**Red Dead Redemption**](https://www.youtube.com/watch?v=Al7yz_5nLag), and many other games.
+> KosPS4 is early in development, don't expect a flawless experience.
 
 # Why
 
 This project began for fun. Given our limited free time, it may take some time before shadPS4 can run more complex games, but we're committed to making small, regular updates.
 
-# Building
+# Building (ShadPS4 Legacy Docs)
 
 ## Docker
 
