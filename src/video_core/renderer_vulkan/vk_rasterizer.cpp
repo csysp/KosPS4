@@ -663,6 +663,8 @@ void Rasterizer::BindBuffers(const Shader::Info& stage, Shader::Backend::Binding
 void Rasterizer::BindTextures(const Shader::Info& stage, Shader::Backend::Bindings& binding) {
     image_bindings.clear();
 
+    boost::container::small_vector<std::pair<VAddr, VideoCore::ImageId>, 16> image_dedup;
+
     for (const auto& image_desc : stage.images) {
         const auto tsharp = image_desc.GetSharp(stage);
         if (texture_cache.IsMeta(tsharp.Address())) {
@@ -676,7 +678,17 @@ void Rasterizer::BindTextures(const Shader::Info& stage, Shader::Backend::Bindin
 
         auto& [image_id, desc] = image_bindings.emplace_back(std::piecewise_construct, std::tuple{},
                                                              std::tuple{tsharp, image_desc});
-        image_id = texture_cache.FindImage(desc);
+        const VAddr guest_addr = desc.info.guest_address;
+        const auto dedup_it =
+            std::ranges::find_if(image_dedup, [guest_addr](const auto& entry) {
+                return entry.first == guest_addr;
+            });
+        if (dedup_it != image_dedup.end()) {
+            image_id = dedup_it->second;
+        } else {
+            image_id = texture_cache.FindImage(desc);
+            image_dedup.emplace_back(guest_addr, image_id);
+        }
         auto* image = &texture_cache.GetImage(image_id);
         if (image->depth_id) {
             // If this image has an associated depth image, it's a stencil attachment.
