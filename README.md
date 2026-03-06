@@ -24,11 +24,12 @@ Grant us eyes, grant us eyes!"</p>
 ### <p align="center">*— Micolash, Host of the Nightmare*</p>
 
 # General information
-**KosPS4** is an early Bloodborne optimized fork of the ShadPS4 v14.0 **PlayStation 4** emulator for **Windows**, **Linux** and **macOS** written in C++. Right now KosPS4 is Windows only.
+**KosPS4** is an early Bloodborne optimized fork of the ShadPS4 v14.0 **PlayStation 4** emulator for **Windows**, **Linux** and **macOS** written in C++. 
+Right now KosPS4 is planned as Windows only.
 The goal is a stable "complete" 60fps 1080p+ experience with enhanced graphics architecture to integrate [**fromsoftserve's BB PC Remaster Mod**](https://www.nexusmods.com/bloodborne/mods/45) without bottlenecks.
 
 > [!IMPORTANT]
-> This is the emulator core for use with BB Launcher, which does not include a GUI. If you just want to use the emulator as an end user, download the [**QtLauncher**](https://github.com/shadps4-emu/shadps4-qtlauncher/releases) instead.
+> This is the emulator core for use with BB Launcher, which does not include a GUI.
 
 
 # Status
@@ -43,30 +44,11 @@ All credit goes to the ShadPS4 team of course, I am simply interested in creatin
 
 # Building (ShadPS4 Legacy Docs)
 
-## Docker
-
-For building shadPS4 in a containerized environment using Docker and VSCode, check the instructions here:  
-[**Docker Build Instructions**](https://github.com/shadps4-emu/shadPS4/blob/main/documents/building-docker.md)
-
 ## Windows
 
 Check the build instructions for [**Windows**](https://github.com/shadps4-emu/shadPS4/blob/main/documents/building-windows.md).
 
-## Linux
-
-Check the build instructions for [**Linux**](https://github.com/shadps4-emu/shadPS4/blob/main/documents/building-linux.md).
-
-## macOS
-
-Check the build instructions for [**macOS**](https://github.com/shadps4-emu/shadPS4/blob/main/documents/building-macos.md).
-
-> [!IMPORTANT]
-> macOS users need at least macOS 15.4 to run shadPS4. Due to GPU issues there are currently heavy bugs on Intel Macs.
-
 # Usage examples
-
-> [!IMPORTANT]
-> For a user-friendly GUI, download the [**QtLauncher**](https://github.com/shadps4-emu/shadps4-qtlauncher/releases).
 
 To get the list of all available commands and also a more detailed description of what each command does, please refer to the `--help` flag's output.
 
@@ -128,7 +110,7 @@ R3 | M |
 Keyboard and mouse inputs can be customized in the settings menu by clicking the Controller button, and further details and help on controls are  also found there. Custom bindings are saved per-game. Inputs support up to three keys per binding, mouse buttons, mouse movement mapped to joystick input, and more.
 
 
-# Firmware files
+# Firmware files (may or may not be needed)
 
 shadPS4 can load some PlayStation 4 firmware files.
 The following firmware modules are supported and must be placed in shadPS4's `sys_modules` folder.
