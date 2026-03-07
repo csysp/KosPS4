@@ -379,6 +379,7 @@ layers are absent but still makes the Vulkan call. Should be gated on a compile-
 | B13 | BuildRuntimeInfo per draw | Medium | Low | P3 | **DONE** (covered by B1 fast-path; BuildRuntimeInfo not called when dirty=false && valid=true) |
 | B14 | PipelineLayout per pipeline | Low | Low | P3 | N/A — descriptor set layout varies per pipeline (built from actual shader buffer/image/sampler counts via BuildDescSetLayout); a shared layout is not possible without a worst-case uber-layout |
 | B18 | std::deque in GpuQueue | Low | Low | P3 | pending |
+| SFX | RT FindImage per particle draw | High (SFX) | Low | P2 | **DONE** (CachedRTInfo skips FindImage/mutex for repeated RT; IsImageAllocated guard) |
 
 ---
 

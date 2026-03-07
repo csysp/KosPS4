@@ -147,6 +147,11 @@ public:
         return image;
     }
 
+    /// Returns true if the image slot is still live (not freed by GC or overlap resolution).
+    [[nodiscard]] bool IsImageAllocated(ImageId id) const {
+        return slot_images.is_allocated(id);
+    }
+
     /// Retrieves the image view with the specified id.
     [[nodiscard]] ImageView& GetImageView(ImageId id) {
         return slot_image_views[id];

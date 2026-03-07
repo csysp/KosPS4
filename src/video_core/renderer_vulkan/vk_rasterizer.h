@@ -131,6 +131,16 @@ private:
     using RenderTargetInfo = std::pair<VideoCore::ImageId, VideoCore::TextureCache::ImageDesc>;
     std::array<RenderTargetInfo, AmdGpu::NUM_COLOR_BUFFERS> cb_descs;
     std::pair<VideoCore::ImageId, VideoCore::TextureCache::ImageDesc> db_desc;
+
+    // Per-draw RT cache: skip FindImage (mutex + page scan) when the same RT is reused
+    // across consecutive draws (common in particle/SFX bursts). Cleared on submit.
+    struct CachedRTInfo {
+        VAddr address{};
+        u32 extent_raw{};
+        VideoCore::ImageId image_id{};
+    };
+    std::array<CachedRTInfo, AmdGpu::NUM_COLOR_BUFFERS> cached_cb_rt{};
+    CachedRTInfo cached_db_rt{};
     boost::container::static_vector<vk::DescriptorImageInfo, Shader::NUM_IMAGES> image_infos;
     boost::container::static_vector<vk::DescriptorBufferInfo, Shader::NUM_BUFFERS> buffer_infos;
     boost::container::static_vector<VideoCore::ImageId, Shader::NUM_IMAGES> bound_images;

@@ -126,9 +126,17 @@ void Rasterizer::PrepareRenderState(const GraphicsPipeline* pipeline) {
         }
         const auto& hint = liverpool->last_cb_extent[cb];
         std::construct_at(&desc, col_buf, hint);
-        image_id = bound_images.emplace_back(texture_cache.FindImage(desc));
-        auto& image = texture_cache.GetImage(image_id);
-        image.binding.is_target = 1u;
+        const VAddr cb_addr = col_buf.Address();
+        auto& rt = cached_cb_rt[cb];
+        if (rt.address == cb_addr && rt.extent_raw == hint.raw && rt.image_id &&
+            texture_cache.IsImageAllocated(rt.image_id)) {
+            image_id = rt.image_id;
+        } else {
+            image_id = texture_cache.FindImage(desc);
+            rt = {cb_addr, hint.raw, image_id};
+        }
+        bound_images.push_back(image_id);
+        texture_cache.GetImage(image_id).binding.is_target = 1u;
     }
 
     if ((regs.depth_control.depth_enable && regs.depth_buffer.DepthValid()) ||
@@ -138,9 +146,16 @@ void Rasterizer::PrepareRenderState(const GraphicsPipeline* pipeline) {
         auto& [image_id, desc] = db_desc;
         std::construct_at(&desc, regs.depth_buffer, regs.depth_view, regs.depth_control,
                           htile_address, hint);
-        image_id = bound_images.emplace_back(texture_cache.FindImage(desc));
-        auto& image = texture_cache.GetImage(image_id);
-        image.binding.is_target = 1u;
+        const VAddr db_addr = regs.depth_buffer.Address();
+        if (cached_db_rt.address == db_addr && cached_db_rt.extent_raw == hint.raw &&
+            cached_db_rt.image_id && texture_cache.IsImageAllocated(cached_db_rt.image_id)) {
+            image_id = cached_db_rt.image_id;
+        } else {
+            image_id = texture_cache.FindImage(desc);
+            cached_db_rt = {db_addr, hint.raw, image_id};
+        }
+        bound_images.push_back(image_id);
+        texture_cache.GetImage(image_id).binding.is_target = 1u;
     } else {
         db_desc.first = {};
     }
@@ -377,6 +392,9 @@ void Rasterizer::OnSubmit() {
     texture_cache.ProcessDownloadImages();
     texture_cache.RunGarbageCollector();
     buffer_cache.RunGarbageCollector();
+    // RT cache may hold stale image IDs after GC; clear so next submit starts fresh.
+    cached_cb_rt.fill({});
+    cached_db_rt = {};
 }
 
 bool Rasterizer::BindResources(const Pipeline* pipeline) {
