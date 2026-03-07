@@ -377,7 +377,7 @@ layers are absent but still makes the Vulkan call. Should be gated on a compile-
 | B17 | ProcessCommands every PM4 opcode | Low-Med | Low | P2 | **DONE** (if (num_commands) guard) |
 | B12 | Compute key always rebuilt | Medium | Low | P2→fixed with B1 | **DONE** |
 | B13 | BuildRuntimeInfo per draw | Medium | Low | P3 | **DONE** (covered by B1 fast-path; BuildRuntimeInfo not called when dirty=false && valid=true) |
-| B14 | PipelineLayout per pipeline | Low | Low | P3 | pending |
+| B14 | PipelineLayout per pipeline | Low | Low | P3 | N/A — descriptor set layout varies per pipeline (built from actual shader buffer/image/sampler counts via BuildDescSetLayout); a shared layout is not possible without a worst-case uber-layout |
 | B18 | std::deque in GpuQueue | Low | Low | P3 | pending |
 
 ---
