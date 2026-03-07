@@ -136,7 +136,7 @@ void TextureCache::MarkAsMaybeDirty(ImageId image_id, Image& image) {
         const u8* addr = std::bit_cast<u8*>(image.info.guest_address);
         const u32 sw = std::min(image.info.size.width, u32(8));
         const u32 sh = std::min(image.info.size.height, u32(8));
-        const u32 size = sw * sh * image.info.num_bits >> (3 + image.info.props.is_block ? 4 : 0);
+        const u32 size = (sw * sh * image.info.num_bits) >> (3 + (image.info.props.is_block ? 4 : 0));
         const u64 init_hash = XXH3_64bits(addr, size);
         image.hash = init_hash != 0 ? init_hash : 1ull; // guarantee non-zero
     }
@@ -219,6 +219,12 @@ ImageId TextureCache::ResolveDepthOverlap(const ImageInfo& requested_info, Bindi
         // The guest requires a depth sampled texture, but cache can offer only Rxf. Need to
         // recreate the image.
         recreate |= requested_info.props.is_depth && !cache_image.info.props.is_depth;
+        // The guest requires a color texture but cache only has a depth image (e.g. shadow map
+        // aliased with an albedo). Return {} so FindImage creates a fresh color image with
+        // Dirty=true and uploads the correct CPU texture data.
+        if (!requested_info.props.is_depth && cache_image.info.props.is_depth) {
+            return {};
+        }
         break;
     case BindingType::Storage:
         // If the guest is going to use previously created depth as storage, the image needs to be
@@ -736,7 +742,7 @@ void TextureCache::RefreshImage(Image& image) {
         const auto addr = std::bit_cast<u8*>(image.info.guest_address);
         const u32 w = std::min(image.info.size.width, u32(8));
         const u32 h = std::min(image.info.size.height, u32(8));
-        const u32 size = w * h * image.info.num_bits >> (3 + image.info.props.is_block ? 4 : 0);
+        const u32 size = (w * h * image.info.num_bits) >> (3 + (image.info.props.is_block ? 4 : 0));
         const u64 hash = XXH3_64bits(addr, size);
         if (image.hash == hash) {
             image.flags &= ~ImageFlagBits::MaybeCpuDirty;
