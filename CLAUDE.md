@@ -154,7 +154,7 @@ Pipeline compilation (`vkCreateGraphicsPipelines` / `vkCreateComputePipelines`) 
 
 **Risks:** Visible pop-in, thread safety for `tsl::robin_map` caches, game compatibility.
 
-**Status:** Not started
+**Status:** Done (already implemented) — 2-thread pool gated by `Config::getAsyncShaderCompilation()`, with `CompileThreadFunc`, `FlushCompletedPipelines`, dedup via `enqueued_graphics`/`enqueued_compute` maps, and proper shutdown.
 
 #### 4.2 InsertPermut Reallocation Guard
 
@@ -178,7 +178,7 @@ Pipeline compilation (`vkCreateGraphicsPipelines` / `vkCreateComputePipelines`) 
 | 2.2 | Duplicate FindImage calls | `vk_rasterizer.cpp:679` | Medium | Medium | ~15 lines | Done |
 | 3.1 | O(n) ResetBindings | `vk_rasterizer.h:106` | Medium | Medium | ~20 lines | Done |
 | 3.2 | Dirty flags bitmask | `vk_scheduler.h:88` | Low | Low-Medium | ~50 lines | Done |
-| 4.1 | Async pipeline compilation | `vk_pipeline_cache.h` | High | High | ~200+ lines | Not started |
+| 4.1 | Async pipeline compilation | `vk_pipeline_cache.h` | High | High | ~200+ lines | Done |
 | 4.2 | InsertPermut guard | `vk_pipeline_cache.h:66` | Very Low | Low | 2 lines | Done |
 
 All items except 4.1 (async pipeline compilation) are complete. Item 4.1 is a standalone feature requiring ~200+ lines, thread pool infrastructure, and careful thread safety work.
@@ -269,7 +269,7 @@ if (image_ids.empty()) {
 
 **Fix:** This is fundamentally tied to fixing ML-2 (ensuring GC runs). Additionally, consider a `surface_metas.max_load_factor(0.5)` or periodic sweep to remove entries whose associated image no longer exists.
 
-**Status:** Unblocked (ML-2 done) — not yet implemented
+**Status:** Done — added periodic sweep every 512 GC ticks in `RunGarbageCollector()`. Builds valid meta address set from all live images, prunes stale entries.
 
 ---
 
@@ -323,7 +323,7 @@ for (const ImageId id : deleted_images) {
 | ML-1 | ShaderModule handles not destroyed | `vk_pipeline_cache.cpp:295` | Shutdown leak | Low (VK validation) | ~8 lines | Done |
 | ML-2 | Texture GC trigger logic broken | `texture_cache.cpp:35,972` | Logic bug → no GC | High (VRAM growth) | ~10 lines | Done |
 | ML-3 | Page table vector capacity not trimmed | `texture_cache.cpp:831,853` | Heap fragmentation | Medium | ~3 lines | Done |
-| ML-4 | `surface_metas` grows without GC | `texture_cache.cpp:670` | Unbounded map | Medium | ~20 lines | Not started |
+| ML-4 | `surface_metas` grows without GC | `texture_cache.cpp:670` | Unbounded map | Medium | ~20 lines | Done |
 | ML-5 | `UnmapMemory` drops dirty image data | `texture_cache.cpp:197` | Correctness + churn | High (visual bugs) | ~10 lines | Done |
 | ML-6 | `ObjectManager` no destructor | `object_manager.h:28` | Shutdown leak | Low (NP libs) | ~5 lines | Done |
 

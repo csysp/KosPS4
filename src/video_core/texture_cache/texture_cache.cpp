@@ -1,6 +1,8 @@
 // SPDX-FileCopyrightText: Copyright 2024 shadPS4 Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include <unordered_set>
+
 #include <xxhash.h>
 
 #include "common/assert.h"
@@ -1032,6 +1034,34 @@ void TextureCache::RunGarbageCollector() {
         // If we are still over the critical limit, run an aggressive GC
         configure(true);
         lru_cache.ForEachItemBelow(gc_tick - ticks_to_destroy, clean_up);
+    }
+
+    // Periodically sweep surface_metas to remove entries for images that no longer exist.
+    // This prevents unbounded growth on systems with large VRAM where GC runs infrequently.
+    constexpr u64 MetaSweepInterval = 512;
+    if ((gc_tick % MetaSweepInterval) == 0 && !surface_metas.empty()) {
+        // Build set of valid meta addresses from all live images.
+        std::unordered_set<VAddr> valid_metas;
+        valid_metas.reserve(surface_metas.size());
+        for (const auto& image : slot_images) {
+            const auto& mi = image.info.meta_info;
+            if (mi.cmask_addr) {
+                valid_metas.insert(mi.cmask_addr);
+            }
+            if (mi.fmask_addr) {
+                valid_metas.insert(mi.fmask_addr);
+            }
+            if (mi.htile_addr) {
+                valid_metas.insert(mi.htile_addr);
+            }
+        }
+        for (auto it = surface_metas.begin(); it != surface_metas.end();) {
+            if (!valid_metas.contains(it->first)) {
+                it = surface_metas.erase(it);
+            } else {
+                ++it;
+            }
+        }
     }
 }
 
