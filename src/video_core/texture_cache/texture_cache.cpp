@@ -136,7 +136,12 @@ void TextureCache::MarkAsMaybeDirty(ImageId image_id, Image& image) {
         const u8* addr = std::bit_cast<u8*>(image.info.guest_address);
         const u32 sw = std::min(image.info.size.width, u32(8));
         const u32 sh = std::min(image.info.size.height, u32(8));
-        const u32 size = (sw * sh * image.info.num_bits) >> (3 + (image.info.props.is_block ? 4 : 0));
+        // Clamp to at least 32 bytes: for block-compressed formats the shift formula
+        // produces only 4 bytes (8×8×8 >> 7), which gives too few distinct values and
+        // causes false "no-change" hits between different BC textures on the same page.
+        const u32 size =
+            std::max((sw * sh * image.info.num_bits) >> (3 + (image.info.props.is_block ? 4 : 0)),
+                     32u);
         const u64 init_hash = XXH3_64bits(addr, size);
         image.hash = init_hash != 0 ? init_hash : 1ull; // guarantee non-zero
     }
@@ -176,16 +181,21 @@ void TextureCache::InvalidateMemory(VAddr addr, size_t size) {
 }
 
 void TextureCache::InvalidateMemoryFromGPU(VAddr address, size_t max_size) {
+    // Only images whose guest_address == address need marking dirty. Since guest_address is the
+    // image base, it always sits on the single page at (address >> PageBits). Avoid iterating
+    // all pages in [address, address+max_size) — a direct single-page lookup is sufficient and
+    // avoids O(max_size / page_size) iterations for large compute write buffers.
     std::scoped_lock lock{mutex};
-    ForEachImageInRegion(address, max_size, [&](ImageId image_id, Image& image) {
-        // Only consider images that match base address.
-        // TODO: Maybe also consider subresources
-        if (image.info.guest_address != address) {
-            return;
+    const auto* page_entry = page_table.find(address >> Traits::PageBits);
+    if (!page_entry) {
+        return;
+    }
+    for (const ImageId image_id : *page_entry) {
+        Image& image = slot_images[image_id];
+        if (image.info.guest_address == address) {
+            image.flags |= ImageFlagBits::GpuDirty;
         }
-        // Ensure image is reuploaded when accessed again.
-        image.flags |= ImageFlagBits::GpuDirty;
-    });
+    }
 }
 
 void TextureCache::UnmapMemory(VAddr cpu_addr, size_t size) {
@@ -219,12 +229,6 @@ ImageId TextureCache::ResolveDepthOverlap(const ImageInfo& requested_info, Bindi
         // The guest requires a depth sampled texture, but cache can offer only Rxf. Need to
         // recreate the image.
         recreate |= requested_info.props.is_depth && !cache_image.info.props.is_depth;
-        // The guest requires a color texture but cache only has a depth image (e.g. shadow map
-        // aliased with an albedo). Return {} so FindImage creates a fresh color image with
-        // Dirty=true and uploads the correct CPU texture data.
-        if (!requested_info.props.is_depth && cache_image.info.props.is_depth) {
-            return {};
-        }
         break;
     case BindingType::Storage:
         // If the guest is going to use previously created depth as storage, the image needs to be
@@ -619,16 +623,22 @@ ImageId TextureCache::FindImage(ImageDesc& desc, bool exact_fmt) {
 }
 
 ImageId TextureCache::FindImageFromRange(VAddr address, size_t size, bool ensure_valid) {
+    // Like InvalidateMemoryFromGPU, only images whose guest_address == address are candidates.
+    // A direct single-page lookup avoids iterating the full [address, address+size) range.
     ImageIds image_ids;
-    ForEachImageInRegion(address, size, [&](ImageId image_id, Image& image) {
-        if (image.info.guest_address != address) {
-            return;
+    const auto* page_entry = page_table.find(address >> Traits::PageBits);
+    if (page_entry) {
+        for (const ImageId image_id : *page_entry) {
+            const Image& image = slot_images[image_id];
+            if (image.info.guest_address != address) {
+                continue;
+            }
+            if (ensure_valid && !image.SafeToDownload()) {
+                continue;
+            }
+            image_ids.push_back(image_id);
         }
-        if (ensure_valid && !image.SafeToDownload()) {
-            return;
-        }
-        image_ids.push_back(image_id);
-    });
+    }
     if (image_ids.size() == 1) {
         // Sometimes image size might not exactly match with requested buffer size
         // If we only found 1 candidate image use it without too many questions.
@@ -742,7 +752,9 @@ void TextureCache::RefreshImage(Image& image) {
         const auto addr = std::bit_cast<u8*>(image.info.guest_address);
         const u32 w = std::min(image.info.size.width, u32(8));
         const u32 h = std::min(image.info.size.height, u32(8));
-        const u32 size = (w * h * image.info.num_bits) >> (3 + (image.info.props.is_block ? 4 : 0));
+        const u32 size =
+            std::max((w * h * image.info.num_bits) >> (3 + (image.info.props.is_block ? 4 : 0)),
+                     32u);
         const u64 hash = XXH3_64bits(addr, size);
         if (image.hash == hash) {
             image.flags &= ~ImageFlagBits::MaybeCpuDirty;
