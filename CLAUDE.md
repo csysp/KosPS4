@@ -90,7 +90,7 @@ Also clean up redundant access masks in SynchronizeBuffer pre-barrier (lines 661
 
 **Verification:** MUST run with Vulkan synchronization validation (`syncval`) and achieve zero errors.
 
-**Status:** Not started
+**Status:** Done — narrowed all `eAllCommands` in CopyBuffer, SynchronizeBuffer, WriteDataBuffer, and JoinBuffers to `eAllGraphics | eComputeShader`.
 
 #### 2.2 Duplicate FindImage Calls Per Draw
 
@@ -104,7 +104,7 @@ boost::container::small_vector<std::pair<VAddr, ImageId>, 16> image_dedup;
 ```
 Before each `FindImage`, check `image_dedup` for matching address. Insert result on miss.
 
-**Status:** Not started
+**Status:** Done (already implemented)
 
 ---
 
@@ -120,7 +120,7 @@ Before each `FindImage`, check `image_dedup` for matching address. Insert result
 
 The `is_target` flag needs separate handling via a small fixed-size array indexed by render target slot (max 9 entries).
 
-**Status:** Not started
+**Status:** Done (already implemented via `AdvanceBindGeneration()` + `bind_gen` field)
 
 #### 3.2 Dirty Flags Bitmask Consolidation
 
@@ -138,7 +138,7 @@ enum DirtyBit : u32 {
 ```
 Benefits: early-out when `dirty_flags == 0`, grouped checks with masks, single-instruction clear.
 
-**Status:** Not started
+**Status:** Done (already implemented)
 
 ---
 
@@ -164,7 +164,7 @@ Pipeline compilation (`vkCreateGraphicsPipelines` / `vkCreateComputePipelines`) 
 
 **Fix:** Add `ASSERT(perm_idx < MaxPermutations)` and pre-reserve.
 
-**Status:** Not started
+**Status:** Done (already implemented)
 
 ---
 
@@ -174,14 +174,14 @@ Pipeline compilation (`vkCreateGraphicsPipelines` / `vkCreateComputePipelines`) 
 |---|-------|---------|------|--------|--------|--------|
 | 0.1 | Dead GC (memory leak bug) | `buffer_cache.cpp:841` | Very Low | Critical | 1 line | Done |
 | 1.1 | O(n) vertex buffer lookup | `buffer_cache.cpp:223` | Very Low | Medium-High | 3 lines | Done |
-| 2.1 | Broad pipeline barriers | `buffer_cache.cpp:326,659` | Medium | High | ~20 lines | Not started |
-| 2.2 | Duplicate FindImage calls | `vk_rasterizer.cpp:679` | Medium | Medium | ~15 lines | Not started |
-| 3.1 | O(n) ResetBindings | `vk_rasterizer.h:106` | Medium | Medium | ~20 lines | Not started |
-| 3.2 | Dirty flags bitmask | `vk_scheduler.h:88` | Low | Low-Medium | ~50 lines | Not started |
+| 2.1 | Broad pipeline barriers | `buffer_cache.cpp:326,659` | Medium | High | ~20 lines | Done |
+| 2.2 | Duplicate FindImage calls | `vk_rasterizer.cpp:679` | Medium | Medium | ~15 lines | Done |
+| 3.1 | O(n) ResetBindings | `vk_rasterizer.h:106` | Medium | Medium | ~20 lines | Done |
+| 3.2 | Dirty flags bitmask | `vk_scheduler.h:88` | Low | Low-Medium | ~50 lines | Done |
 | 4.1 | Async pipeline compilation | `vk_pipeline_cache.h` | High | High | ~200+ lines | Not started |
-| 4.2 | InsertPermut guard | `vk_pipeline_cache.h:66` | Very Low | Low | 2 lines | Not started |
+| 4.2 | InsertPermut guard | `vk_pipeline_cache.h:66` | Very Low | Low | 2 lines | Done |
 
-Items 0.1 and 1.1 can ship together with near-zero regression risk. Item 2.1 requires synchronization validation. Items 2.2-3.2 are independent and can be developed in parallel. Item 4.1 is a standalone feature branch.
+All items except 4.1 (async pipeline compilation) are complete. Item 4.1 is a standalone feature requiring ~200+ lines, thread pool infrastructure, and careful thread safety work.
 
 ---
 

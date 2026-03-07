@@ -322,9 +322,11 @@ void BufferCache::CopyBuffer(VAddr dst, VAddr src, u32 num_bytes, bool dst_gds, 
         .dstOffset = dst_buffer.Offset(dst),
         .size = num_bytes,
     };
+    constexpr auto kGfxCompute =
+        vk::PipelineStageFlagBits2::eAllGraphics | vk::PipelineStageFlagBits2::eComputeShader;
     const vk::BufferMemoryBarrier2 buf_barriers_before[2] = {
         {
-            .srcStageMask = vk::PipelineStageFlagBits2::eAllCommands,
+            .srcStageMask = kGfxCompute,
             .srcAccessMask = vk::AccessFlagBits2::eMemoryRead,
             .dstStageMask = vk::PipelineStageFlagBits2::eTransfer,
             .dstAccessMask = vk::AccessFlagBits2::eTransferWrite,
@@ -333,7 +335,7 @@ void BufferCache::CopyBuffer(VAddr dst, VAddr src, u32 num_bytes, bool dst_gds, 
             .size = num_bytes,
         },
         {
-            .srcStageMask = vk::PipelineStageFlagBits2::eAllCommands,
+            .srcStageMask = kGfxCompute,
             .srcAccessMask = vk::AccessFlagBits2::eMemoryWrite,
             .dstStageMask = vk::PipelineStageFlagBits2::eTransfer,
             .dstAccessMask = vk::AccessFlagBits2::eTransferRead,
@@ -354,7 +356,7 @@ void BufferCache::CopyBuffer(VAddr dst, VAddr src, u32 num_bytes, bool dst_gds, 
         {
             .srcStageMask = vk::PipelineStageFlagBits2::eTransfer,
             .srcAccessMask = vk::AccessFlagBits2::eTransferWrite,
-            .dstStageMask = vk::PipelineStageFlagBits2::eAllCommands,
+            .dstStageMask = kGfxCompute,
             .dstAccessMask = vk::AccessFlagBits2::eMemoryRead,
             .buffer = dst_buffer.Handle(),
             .offset = dst_buffer.Offset(dst),
@@ -363,7 +365,7 @@ void BufferCache::CopyBuffer(VAddr dst, VAddr src, u32 num_bytes, bool dst_gds, 
         {
             .srcStageMask = vk::PipelineStageFlagBits2::eTransfer,
             .srcAccessMask = vk::AccessFlagBits2::eTransferRead,
-            .dstStageMask = vk::PipelineStageFlagBits2::eAllCommands,
+            .dstStageMask = kGfxCompute,
             .dstAccessMask = vk::AccessFlagBits2::eMemoryWrite,
             .buffer = src_buffer.Handle(),
             .offset = src_buffer.Offset(src),
@@ -554,15 +556,17 @@ void BufferCache::JoinOverlap(BufferId new_buffer_id, BufferId overlap_id,
 
     cmdbuf.copyBuffer(overlap.Handle(), new_buffer.Handle(), copy);
 
+    constexpr auto kGfxCompute =
+        vk::PipelineStageFlagBits2::eAllGraphics | vk::PipelineStageFlagBits2::eComputeShader;
     boost::container::static_vector<vk::BufferMemoryBarrier2, 2> post_barriers{};
     if (auto src_barrier =
             overlap.GetBarrier(vk::AccessFlagBits2::eMemoryRead | vk::AccessFlagBits2::eMemoryWrite,
-                               vk::PipelineStageFlagBits2::eAllCommands)) {
+                               kGfxCompute)) {
         post_barriers.push_back(*src_barrier);
     }
     if (auto dst_barrier = new_buffer.GetBarrier(
             vk::AccessFlagBits2::eMemoryRead | vk::AccessFlagBits2::eMemoryWrite,
-            vk::PipelineStageFlagBits2::eAllCommands, dst_base_offset)) {
+            kGfxCompute, dst_base_offset)) {
         post_barriers.push_back(*dst_barrier);
     }
     cmdbuf.pipelineBarrier2(vk::DependencyInfo{
@@ -656,8 +660,10 @@ bool BufferCache::SynchronizeBuffer(Buffer& buffer, VAddr device_addr, u32 size,
     if (src_buffer) {
         scheduler.EndRendering();
         const auto cmdbuf = scheduler.CommandBuffer();
+        constexpr auto kGfxCompute = vk::PipelineStageFlagBits2::eAllGraphics |
+                                     vk::PipelineStageFlagBits2::eComputeShader;
         const vk::BufferMemoryBarrier2 pre_barrier = {
-            .srcStageMask = vk::PipelineStageFlagBits2::eAllCommands,
+            .srcStageMask = kGfxCompute,
             .srcAccessMask = vk::AccessFlagBits2::eMemoryRead | vk::AccessFlagBits2::eMemoryWrite,
             .dstStageMask = vk::PipelineStageFlagBits2::eTransfer,
             .dstAccessMask = vk::AccessFlagBits2::eTransferWrite,
@@ -668,7 +674,7 @@ bool BufferCache::SynchronizeBuffer(Buffer& buffer, VAddr device_addr, u32 size,
         const vk::BufferMemoryBarrier2 post_barrier = {
             .srcStageMask = vk::PipelineStageFlagBits2::eTransfer,
             .srcAccessMask = vk::AccessFlagBits2::eTransferWrite,
-            .dstStageMask = vk::PipelineStageFlagBits2::eAllCommands,
+            .dstStageMask = kGfxCompute,
             .dstAccessMask = vk::AccessFlagBits2::eMemoryRead | vk::AccessFlagBits2::eMemoryWrite,
             .buffer = buffer.Handle(),
             .offset = 0,
@@ -805,8 +811,10 @@ void BufferCache::WriteDataBuffer(Buffer& buffer, VAddr address, const void* val
     }
     scheduler.EndRendering();
     const auto cmdbuf = scheduler.CommandBuffer();
+    constexpr auto kGfxCompute =
+        vk::PipelineStageFlagBits2::eAllGraphics | vk::PipelineStageFlagBits2::eComputeShader;
     const vk::BufferMemoryBarrier2 pre_barrier = {
-        .srcStageMask = vk::PipelineStageFlagBits2::eAllCommands,
+        .srcStageMask = kGfxCompute,
         .srcAccessMask = vk::AccessFlagBits2::eMemoryRead,
         .dstStageMask = vk::PipelineStageFlagBits2::eTransfer,
         .dstAccessMask = vk::AccessFlagBits2::eTransferWrite,
@@ -817,7 +825,7 @@ void BufferCache::WriteDataBuffer(Buffer& buffer, VAddr address, const void* val
     const vk::BufferMemoryBarrier2 post_barrier = {
         .srcStageMask = vk::PipelineStageFlagBits2::eTransfer,
         .srcAccessMask = vk::AccessFlagBits2::eTransferWrite,
-        .dstStageMask = vk::PipelineStageFlagBits2::eAllCommands,
+        .dstStageMask = kGfxCompute,
         .dstAccessMask = vk::AccessFlagBits2::eMemoryRead | vk::AccessFlagBits2::eMemoryWrite,
         .buffer = buffer.Handle(),
         .offset = buffer.Offset(address),
