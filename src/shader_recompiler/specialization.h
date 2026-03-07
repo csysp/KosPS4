@@ -4,6 +4,7 @@
 #pragma once
 
 #include <bitset>
+#define XXH_STATIC_LINKING_ONLY
 #include <xxhash.h>
 
 #include "common/hash.h"
