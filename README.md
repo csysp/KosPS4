@@ -52,7 +52,7 @@ shadPS4 /path/to/game.elf # Boots a PS4 ELF file directly. Useful if you want to
 shadPS4 CUSA00001 -- -flag1 -flag2 # Passes '-flag1' and '-flag2' to the game executable in argv.
 ```
 
-# Keyboard and Mouse Mappings
+# Extras
 
 > [!NOTE]
 > Some keyboards may also require you to hold the Fn key to use the F\* keys. Mac users should use the Command key instead of Control, and need to use Command+F11 for full screen to avoid conflicting with system key bindings.
