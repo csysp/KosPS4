@@ -29,7 +29,6 @@ The goal is a stable "complete" 60fps 1080p+ experience with enhanced graphics a
 > [!IMPORTANT]
 > This is the emulator core for use with BB Launcher, which does not include a GUI.
 
-
 # Status
 
 > [!IMPORTANT]
@@ -39,12 +38,6 @@ The goal is a stable "complete" 60fps 1080p+ experience with enhanced graphics a
 
 After following the ShadPS4 project closely since release, I have felt there is an opportunity to create a personal fork that drills into performance and optimizations specifially around Bloodborne. 
 All credit goes to the ShadPS4 team of course, I am simply interested in creating the smoothest BB emulation experience possible.
-
-# Building (ShadPS4 Legacy Docs)
-
-## Windows
-
-Check the build instructions for [**Windows**](https://github.com/shadps4-emu/shadPS4/blob/main/documents/building-windows.md).
 
 # Usage examples
 
@@ -58,10 +51,6 @@ shadPS4 -g CUSA00001 --fullscreen true --config-clean # ...unless manually speci
 shadPS4 /path/to/game.elf # Boots a PS4 ELF file directly. Useful if you want to boot an executable that is not named eboot.bin.
 shadPS4 CUSA00001 -- -flag1 -flag2 # Passes '-flag1' and '-flag2' to the game executable in argv.
 ```
-
-# Debugging and reporting issues
-
-For more information on how to test, debug and report issues with the emulator or games, read the [**Debugging documentation**](https://github.com/shadps4-emu/shadPS4/blob/main/documents/Debugging/Debugging.md).
 
 # Keyboard and Mouse Mappings
 
@@ -77,36 +66,6 @@ F12 | Trigger RenderDoc Capture
 
 > [!NOTE]
 > Xbox and DualShock controllers work out of the box.
-
-| Controller button | Keyboard equivalent |
-|-------------|-------------|
-LEFT AXIS UP | W |
-LEFT AXIS DOWN | S |
-LEFT AXIS LEFT | A |
-LEFT AXIS RIGHT | D |
-RIGHT AXIS UP | I |
-RIGHT AXIS DOWN | K |
-RIGHT AXIS LEFT | J |
-RIGHT AXIS RIGHT | L |
-TRIANGLE | Numpad 8 or C |
-CIRCLE | Numpad 6 or B |
-CROSS | Numpad 2 or N |
-SQUARE | Numpad 4 or V |
-PAD UP | UP |
-PAD DOWN | DOWN |
-PAD LEFT | LEFT |
-PAD RIGHT | RIGHT |
-OPTIONS | RETURN |
-BACK BUTTON / TOUCH PAD | SPACE |
-L1 | Q |
-R1 | U |
-L2 | E |
-R2 | O |
-L3 | X |
-R3 | M |
-
-Keyboard and mouse inputs can be customized in the settings menu by clicking the Controller button, and further details and help on controls are  also found there. Custom bindings are saved per-game. Inputs support up to three keys per binding, mouse buttons, mouse movement mapped to joystick input, and more.
-
 
 # Firmware files (may or may not be needed)
 
@@ -125,8 +84,6 @@ The following firmware modules are supported and must be placed in shadPS4's `sy
 
 > [!Caution]
 > The above modules are required to run the games properly and must be dumped from your legally owned PlayStation 4 console.
-
-
 
 # Main team
 
