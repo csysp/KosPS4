@@ -338,9 +338,12 @@ const ComputePipeline* PipelineCache::GetComputePipeline() {
 }
 
 bool PipelineCache::RefreshGraphicsKey() {
-    // Fast path: no GPU state changed since last draw — reuse cached key and shader infos.
-    if (!liverpool->ConsumeGraphicsDirty()) {
-        return graphics_key_valid;
+    // Fast path: no GPU state changed since last draw AND last build succeeded.
+    // If graphics_key_valid is false (last build failed, e.g. shader not yet loaded),
+    // fall through to retry even when no new dirty registers were written — otherwise
+    // the failed state persists until the next SetContextReg/SetShReg (e.g. on attack).
+    if (!liverpool->ConsumeGraphicsDirty() && graphics_key_valid) {
+        return true;
     }
     graphics_key_valid = false;
     std::memset(&graphics_key, 0, sizeof(GraphicsPipelineKey));

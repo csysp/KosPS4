@@ -8,19 +8,18 @@ Further reports/planned fixes on Memory leaks, Dead code/stubs, and area/chunk l
 ALWAYS WORK WITHIN /csysp/KosPS4/tree/claude/performance-audit-rsRnx we will push to main later 
 
 
-Human Dev Build Test Notes -- 2026-03-06 5:16 PM
+Human Dev Build Test Notes -- 2026-03-07 9:37 PM
 
-HIGH CONCERN ----- SEVERE issues in the rendering pipeline, The Hunters Dream is almost a fully black screen with only some point lights visible while the player character and NPCs and destroyables all lack textures/shader/shadow maps until struck anywhere in game (i assume this is because attacking recalls graphics processes)
+HIGH CONCERN ----- (Could be related to build errors?) SEVERE issues in the rendering pipeline PERSIST, The Hunters Dream is still almost a fully black screen with only some point lights visible while the player character and NPCs and destroyables all lack textures/shader/shadow maps until struck anywhere in game (i assume this is because attacking recalls graphics processes)
+HIGH CONCERN ----- SEVERE sub 10fps slowdowns on loading screens again!
+HIGH CONCERN ----- Severe stutters loading areas persist sub 20fps
 HIGH CONCERN ----- sfx (fire, smoke etc) cause severe FPS slowdowns - check into why this is happening
 Note to model - Testing is done via BB launcher with and without 1440 patches and the BB PC Remaster Mod https://www.nexusmods.com/bloodborne/mods/45 which we will support "natively" via optimized performance architecture for seamless 60fps 1080p+.
-Note to model - Multiple local changes were made to get the source to build - check for these and make note
-Note to model - General FPS and "area/chunk loading" are significantly improved even this early on in development - much more work to be done to achieve fully stable 60fps. 
 Note to model - I would like to use shadPS4's internal Tracy for raw data review but am having trouble getting the connection up. 
 Note to model - Better support for dynamic shadow processing (BB PC Remaster feature) is needed. (Future commit)
-Note to model - Loading screen FPS slowdowns are almost completely gone - great work on that
 Note to model - Integrating the custom KosPS4 icon and branding into the build (ALWAYS respecting licences) is a needed (Future commit)! 
-Note to model - 45+ mins running without obvious performance degredation seems to point to solid fixes!
 Note to model - If needed build error/warning logs can be provided - just ask - 5000+ were thrown
+
 
 ---
 
@@ -377,7 +376,7 @@ layers are absent but still makes the Vulkan call. Should be gated on a compile-
 | B16 | Async compute queue fairness | High (BB) | Medium | P2 | **DONE** (GFX priority after compute slice) |
 | B17 | ProcessCommands every PM4 opcode | Low-Med | Low | P2 | **DONE** (if (num_commands) guard) |
 | B12 | Compute key always rebuilt | Medium | Low | P2→fixed with B1 | **DONE** |
-| B13 | BuildRuntimeInfo per draw | Medium | Low | P3 | pending |
+| B13 | BuildRuntimeInfo per draw | Medium | Low | P3 | **DONE** (covered by B1 fast-path; BuildRuntimeInfo not called when dirty=false && valid=true) |
 | B14 | PipelineLayout per pipeline | Low | Low | P3 | pending |
 | B18 | std::deque in GpuQueue | Low | Low | P3 | pending |
 
