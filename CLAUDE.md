@@ -378,8 +378,11 @@ layers are absent but still makes the Vulkan call. Should be gated on a compile-
 | B12 | Compute key always rebuilt | Medium | Low | P2→fixed with B1 | **DONE** |
 | B13 | BuildRuntimeInfo per draw | Medium | Low | P3 | **DONE** (covered by B1 fast-path; BuildRuntimeInfo not called when dirty=false && valid=true) |
 | B14 | PipelineLayout per pipeline | Low | Low | P3 | N/A — descriptor set layout varies per pipeline (built from actual shader buffer/image/sampler counts via BuildDescSetLayout); a shared layout is not possible without a worst-case uber-layout |
-| B18 | std::deque in GpuQueue | Low | Low | P3 | pending |
-| SFX | RT FindImage per particle draw | High (SFX) | Low | P2 | **DONE** (CachedRTInfo skips FindImage/mutex for repeated RT; IsImageAllocated guard) |
+| B18 | std::deque in GpuQueue | Low | Low | P3 | N/A — GpuQueue holds ≤1 handle at a time (SubmitGfx blocks until num_submits==0); std::deque overhead is negligible |
+| BufferGC | BufferCache::RunGarbageCollector never freed anything | CRITICAL | Low | P0 | **DONE** — clean_up lambda was defined but lru_cache.ForEachItemBelow never called; buffers accumulated indefinitely |
+| SFX-1 | RT FindImage per particle draw | High (SFX) | Low | P2 | **DONE** (CachedRTInfo skips FindImage/mutex for repeated RT; IsImageAllocated guard) |
+| SFX-2 | Texture FindImage per particle draw | High (SFX) | Low | P2 | **DONE** (tex_lookup_cache robin_map skips FindImage; cleared on submit) |
+| SFX-3 | UpdateImage mutex per texture per draw | High (SFX) | Low | P2 | **DONE** (fast path: no mutex when image clean+fully tracked; only LRU touch) |
 
 ---
 

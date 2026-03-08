@@ -851,16 +851,26 @@ void BufferCache::RunGarbageCollector() {
     const bool aggressive = total_used_memory >= critical_gc_memory;
     const u64 ticks_to_destroy = std::min<u64>(aggressive ? 80 : 160, gc_tick);
     int max_deletions = aggressive ? 64 : 32;
-    const auto clean_up = [&](BufferId buffer_id) {
+    const auto clean_up = [&](BufferId buffer_id) -> bool {
         if (max_deletions == 0) {
-            return;
+            return true; // stop iteration early
         }
         --max_deletions;
         Buffer& buffer = slot_buffers[buffer_id];
         // InvalidateMemory(buffer.CpuAddr(), buffer.SizeBytes());
         DownloadBufferMemory<true>(buffer, buffer.CpuAddr(), buffer.SizeBytes(), true);
         DeleteBuffer(buffer_id);
+        return false;
     };
+
+    // Free old buffers that haven't been used recently.
+    lru_cache.ForEachItemBelow(gc_tick - ticks_to_destroy, clean_up);
+
+    if (total_used_memory >= critical_gc_memory) {
+        // Aggressive pass: destroy more aggressively if still over critical threshold.
+        max_deletions = 64;
+        lru_cache.ForEachItemBelow(gc_tick, clean_up);
+    }
 }
 
 void BufferCache::TouchBuffer(const Buffer& buffer) {
