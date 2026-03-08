@@ -33,7 +33,11 @@ TextureCache::TextureCache(const Vulkan::Instance& instance_, Vulkan::Scheduler&
 
     // Set up garbage collection parameters.
     if (!instance.CanReportMemoryUsage()) {
-        trigger_gc_memory = 0;
+        // Without VK_EXT_memory_budget, total_used_memory is tracked via RegisterImage /
+        // UnregisterImage (sum of guest_size for all live images). Use it as a proxy for
+        // VRAM pressure. Setting trigger_gc_memory = 0 made GC acquire the global mutex on
+        // every single submit, causing severe per-submit stalls.
+        trigger_gc_memory = DEFAULT_PRESSURE_GC_MEMORY / 2; // ~768 MB
         pressure_gc_memory = DEFAULT_PRESSURE_GC_MEMORY;
         critical_gc_memory = DEFAULT_CRITICAL_GC_MEMORY;
         return;
