@@ -281,7 +281,19 @@ PipelineCache::PipelineCache(const Instance& instance_, Scheduler& scheduler_,
     pipeline_cache = std::move(cache);
 }
 
-PipelineCache::~PipelineCache() = default;
+PipelineCache::~PipelineCache() {
+    // Explicitly destroy shader modules; vk::ShaderModule is a plain handle type
+    // (not vk::Unique*) so Program's default destructor does not call vkDestroyShaderModule.
+    const auto device = instance.GetDevice();
+    for (auto& [_, program] : program_cache) {
+        for (auto& m : program->modules) {
+            if (m.module) {
+                device.destroyShaderModule(m.module);
+                m.module = nullptr;
+            }
+        }
+    }
+}
 
 const GraphicsPipeline* PipelineCache::GetGraphicsPipeline() {
     if (!RefreshGraphicsKey()) {
