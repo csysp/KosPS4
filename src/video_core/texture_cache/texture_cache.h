@@ -113,8 +113,19 @@ public:
 
     /// Updates image contents if it was modified by CPU.
     void UpdateImage(ImageId image_id) {
-        std::scoped_lock lock{mutex};
         Image& image = slot_images[image_id];
+        // Fast path: image is clean and fully tracked — only update LRU, no mutex needed.
+        // TrackImage is a no-op when track_addr already covers the full image.
+        // RefreshImage is a no-op when no Dirty bits are set.
+        // CPU fault handler sets Dirty bits and zeroes track_addr under the mutex before
+        // returning, so the benign race (reading stale-clean flags) is bounded to 1 frame.
+        if (False(image.flags & ImageFlagBits::Dirty) &&
+            image.track_addr == image.info.guest_address &&
+            image.track_addr_end == image.info.guest_address + image.info.guest_size) {
+            TouchImage(image);
+            return;
+        }
+        std::scoped_lock lock{mutex};
         TrackImage(image_id);
         TouchImage(image);
         RefreshImage(image);

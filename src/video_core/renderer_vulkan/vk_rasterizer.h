@@ -141,6 +141,12 @@ private:
     };
     std::array<CachedRTInfo, AmdGpu::NUM_COLOR_BUFFERS> cached_cb_rt{};
     CachedRTInfo cached_db_rt{};
+
+    // Submit-scoped texture FindImage cache: maps tsharp GPU VA → ImageId.
+    // Avoids repeated mutex + page-table scan for the same texture across consecutive draws
+    // (e.g. a burst of 100 particle draws all sampling the same fire/smoke sprite sheet).
+    // Cleared in OnSubmit() after GC so stale IDs are never used across GC boundaries.
+    tsl::robin_map<VAddr, VideoCore::ImageId> tex_lookup_cache;
     boost::container::static_vector<vk::DescriptorImageInfo, Shader::NUM_IMAGES> image_infos;
     boost::container::static_vector<vk::DescriptorBufferInfo, Shader::NUM_BUFFERS> buffer_infos;
     boost::container::static_vector<VideoCore::ImageId, Shader::NUM_IMAGES> bound_images;

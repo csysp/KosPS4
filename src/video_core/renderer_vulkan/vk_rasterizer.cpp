@@ -392,9 +392,10 @@ void Rasterizer::OnSubmit() {
     texture_cache.ProcessDownloadImages();
     texture_cache.RunGarbageCollector();
     buffer_cache.RunGarbageCollector();
-    // RT cache may hold stale image IDs after GC; clear so next submit starts fresh.
+    // RT and texture caches may hold stale image IDs after GC; clear for next submit.
     cached_cb_rt.fill({});
     cached_db_rt = {};
+    tex_lookup_cache.clear();
 }
 
 bool Rasterizer::BindResources(const Pipeline* pipeline) {
@@ -694,7 +695,20 @@ void Rasterizer::BindTextures(const Shader::Info& stage, Shader::Backend::Bindin
 
         auto& [image_id, desc] = image_bindings.emplace_back(std::piecewise_construct, std::tuple{},
                                                              std::tuple{tsharp, image_desc});
-        image_id = texture_cache.FindImage(desc);
+        // Check submit-scoped cache before the full FindImage (mutex + page scan).
+        const VAddr tex_addr = tsharp.Address();
+        if (const auto it = tex_lookup_cache.find(tex_addr); it != tex_lookup_cache.end()) {
+            const auto cached_id = it->second;
+            if (texture_cache.IsImageAllocated(cached_id)) {
+                image_id = cached_id;
+            } else {
+                image_id = texture_cache.FindImage(desc);
+                it.value() = image_id;
+            }
+        } else {
+            image_id = texture_cache.FindImage(desc);
+            tex_lookup_cache.emplace(tex_addr, image_id);
+        }
         auto* image = &texture_cache.GetImage(image_id);
         if (image->depth_id) {
             // If this image has an associated depth image, it's a stencil attachment.
@@ -726,6 +740,10 @@ void Rasterizer::BindTextures(const Shader::Info& stage, Shader::Backend::Bindin
                 old_image.binding.needs_rebind) {
                 old_image.binding = {};
                 image_id = texture_cache.FindImage(desc);
+                // Keep tex_lookup_cache consistent after image recreation.
+                if (desc.info.guest_address != 0) {
+                    tex_lookup_cache.insert_or_assign(desc.info.guest_address, image_id);
+                }
             }
 
             bound_images.emplace_back(image_id);
