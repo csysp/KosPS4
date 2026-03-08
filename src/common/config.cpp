@@ -177,6 +177,7 @@ static ConfigEntry<bool> readbackLinearImagesEnabled(false);
 static ConfigEntry<bool> directMemoryAccessEnabled(false);
 static ConfigEntry<bool> shouldDumpShaders(false);
 static ConfigEntry<bool> shouldPatchShaders(false);
+static ConfigEntry<bool> asyncShaderCompilation(false);
 static ConfigEntry<u32> vblankFrequency(60);
 static ConfigEntry<bool> isFullscreen(false);
 static ConfigEntry<string> fullscreenMode("Windowed");
@@ -458,6 +459,14 @@ bool dumpShaders() {
 
 bool patchShaders() {
     return shouldPatchShaders.get();
+}
+
+bool getAsyncShaderCompilation() {
+    return asyncShaderCompilation.get();
+}
+
+void setAsyncShaderCompilation(bool enable, bool is_game_specific) {
+    asyncShaderCompilation.set(enable, is_game_specific);
 }
 
 bool isRdocEnabled() {

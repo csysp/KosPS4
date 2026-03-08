@@ -104,9 +104,7 @@ private:
     bool BindResources(const Pipeline* pipeline);
 
     void ResetBindings() {
-        for (auto& image_id : bound_images) {
-            texture_cache.GetImage(image_id).binding = {};
-        }
+        texture_cache.AdvanceBindGeneration();
         bound_images.clear();
     }
 
@@ -132,21 +130,6 @@ private:
     std::array<RenderTargetInfo, AmdGpu::NUM_COLOR_BUFFERS> cb_descs;
     std::pair<VideoCore::ImageId, VideoCore::TextureCache::ImageDesc> db_desc;
 
-    // Per-draw RT cache: skip FindImage (mutex + page scan) when the same RT is reused
-    // across consecutive draws (common in particle/SFX bursts). Cleared on submit.
-    struct CachedRTInfo {
-        VAddr address{};
-        u32 extent_raw{};
-        VideoCore::ImageId image_id{};
-    };
-    std::array<CachedRTInfo, AmdGpu::NUM_COLOR_BUFFERS> cached_cb_rt{};
-    CachedRTInfo cached_db_rt{};
-
-    // Submit-scoped texture FindImage cache: maps tsharp GPU VA → ImageId.
-    // Avoids repeated mutex + page-table scan for the same texture across consecutive draws
-    // (e.g. a burst of 100 particle draws all sampling the same fire/smoke sprite sheet).
-    // Cleared in OnSubmit() after GC so stale IDs are never used across GC boundaries.
-    tsl::robin_map<VAddr, VideoCore::ImageId> tex_lookup_cache;
     boost::container::static_vector<vk::DescriptorImageInfo, Shader::NUM_IMAGES> image_infos;
     boost::container::static_vector<vk::DescriptorBufferInfo, Shader::NUM_BUFFERS> buffer_infos;
     boost::container::static_vector<VideoCore::ImageId, Shader::NUM_IMAGES> bound_images;

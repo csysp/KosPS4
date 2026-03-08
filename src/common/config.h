@@ -133,6 +133,8 @@ int getSpecialPadClass();
 bool getPSNSignedIn();
 void setPSNSignedIn(bool sign, bool is_game_specific = false);
 bool patchShaders(); // no set
+bool getAsyncShaderCompilation();
+void setAsyncShaderCompilation(bool enable, bool is_game_specific = false);
 bool getShowFpsCounter();
 void setShowFpsCounter(bool enable, bool is_game_specific = false);
 bool isNeoModeConsole();

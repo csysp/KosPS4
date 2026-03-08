@@ -1,415 +1,341 @@
-# KosPS4 — Claude Code Context & Optimization Audit
+# CLAUDE.md — KosPS4 (shadPS4 Fork)
 
-> **Focus:** Bloodborne emulation performance. This file contains architectural reference,
-> dataflow documentation, and a prioritized performance audit for use in AI-assisted optimization sessions.
+## Project Overview
 
+PS4 emulator based on shadPS4. C++23, Vulkan rendering backend, CMake build system.
 
-Further reports/planned fixes on Memory leaks, Dead code/stubs, and area/chunk loading bottlenecks are CRITICAL.
-ALWAYS WORK WITHIN /csysp/KosPS4/tree/claude/performance-audit-rsRnx we will push to main later 
-
-
-Human Dev Build Test Notes -- 2026-03-07 9:37 PM
-
-HIGH CONCERN ----- (Could be related to build errors?) SEVERE issues in the rendering pipeline PERSIST, The Hunters Dream is still almost a fully black screen with only some point lights visible while the player character and NPCs and destroyables all lack textures/shader/shadow maps until struck anywhere in game (i assume this is because attacking recalls graphics processes)
-HIGH CONCERN ----- SEVERE sub 10fps slowdowns on loading screens again!
-HIGH CONCERN ----- Severe stutters loading areas persist sub 20fps
-HIGH CONCERN ----- sfx (fire, smoke etc) cause severe FPS slowdowns - check into why this is happening
-Note to model - Testing is done via BB launcher with and without 1440 patches and the BB PC Remaster Mod https://www.nexusmods.com/bloodborne/mods/45 which we will support "natively" via optimized performance architecture for seamless 60fps 1080p+.
-Note to model - I would like to use shadPS4's internal Tracy for raw data review but am having trouble getting the connection up. 
-Note to model - Better support for dynamic shadow processing (BB PC Remaster feature) is needed. (Future commit)
-Note to model - Integrating the custom KosPS4 icon and branding into the build (ALWAYS respecting licences) is a needed (Future commit)! 
-Note to model - If needed build error/warning logs can be provided - just ask - 5000+ were thrown
-
-
----
-
-## 1. Project Identity
-
-- **Base:** Fork of [shadPS4](https://github.com/shadps4-emu/shadPS4) — early PS4 emulator in C++23
-- **Renderer:** Vulkan (via `vulkan.hpp`) — no OpenGL/D3D path
-- **CPU:** Native x86-64 execution — no recompiler; PS4 games run directly
-- **Build:** CMake, multi-platform (Windows/Linux/macOS)
-- **Primary target game:** Bloodborne (From Software) — heavily exercises async compute,
-  deferred rendering, PS4 fibers, and complex GCN shader workloads
-
----
-
-## 2. Full Architecture & Dataflow
-
-```
-Game ELF/PKG
-  └─> [Linker / Loader]           src/core/linker.cpp
-        | Loads PRX modules, resolves symbol imports/exports
-        | Maps ~30+ HLE library callbacks
-        |
-        └─> [CPU Execution]        native x86-64 on host
-              | cpu_patches.cpp  — patches PS4 instructions host can't handle
-              | signals.cpp      — SIGSEGV → memory fault → cache invalidation
-              | tls.cpp          — PS4 thread-local storage emulation
-              |
-              └─> [HLE Library Calls]    src/core/libraries/
-                    | gnmdriver/  — GPU command submission
-                    | kernel/     — threading, fibers, semaphores, memory
-                    | videoout/   — flip/present interface
-                    | ajm/        — Audio Job Manager
-                    | pad/audio/network/etc.
-                    |
-                    └─> [GNM Driver → Liverpool]
-                          | gnmdriver.cpp translates sceGnm* → PM4 packets
-                          | Calls Liverpool::SubmitGfx / SubmitAsc
-                          |
-                          └─> [Liverpool — GPU Command Processor]
-                                src/video_core/amdgpu/liverpool.cpp
-                                | 1 GFX ring + 56 async compute rings
-                                | C++20 coroutines for queue scheduling
-                                | ProcessGraphics(dcb, ccb): decode draw cmd bufs
-                                | ProcessCompute(acb): decode async compute bufs
-                                | AmdGpu::Regs: full GCN register file model
-                                | SendCommand(): thread-safe dispatch to rasterizer
-                                |
-                                └─> [Vulkan Rasterizer]
-                                      src/video_core/renderer_vulkan/vk_rasterizer.cpp
-                                      | Draw() / DrawIndirect()
-                                      | DispatchDirect() / DispatchIndirect()
-                                      | BindResources() — buffers + textures
-                                      | BeginRendering() / EndRendering()
-                                      |
-                                      ├─> [Pipeline Cache]     vk_pipeline_cache.cpp
-                                      |     | RefreshGraphicsKey() — hash GPU reg state
-                                      |     | tsl::robin_map lookup
-                                      |     | GetProgram() — shader module cache
-                                      |     | CompileModule() → ShaderTranslate → SPIRV
-                                      |     | Up to 8 permutations per shader
-                                      |     | Disk serialization warmup
-                                      |
-                                      ├─> [Shader Recompiler]  src/shader_recompiler/
-                                      |     Frontend: GCN ISA → CFG → IR (SSA)
-                                      |       translate/{scalar_alu, vector_alu,
-                                      |         scalar_memory, vector_memory,
-                                      |         export, data_share}.cpp
-                                      |     IR Passes: ssa_rewrite, const_prop, DCE,
-                                      |       resource_tracking, ring_access_elimination,
-                                      |       lower_fp64_to_fp32, shared_memory_*
-                                      |     Backend: IR → SPIR-V → vk::ShaderModule
-                                      |
-                                      ├─> [Texture Cache]      src/video_core/texture_cache/
-                                      |     PS4 GPU VA → vk::Image mapping
-                                      |     tile_manager.cpp: GCN detiling (compute shader)
-                                      |     Render target aliasing via ResolveOverlap()
-                                      |     XXH3 hash-based dirty detection
-                                      |
-                                      └─> [Buffer Cache]       src/video_core/buffer_cache/
-                                            Vertex/index/uniform buffer tracking
-                                            fault_manager.cpp: SIGSEGV fault-based invalidation
-                                            memory_tracker.h: dirty region bitmask
-                                            |
-                                            └─> [Scheduler]    vk_scheduler.cpp
-                                                  Command buffer recording + submission
-                                                  Master timeline semaphore
-                                                  3 types: Draw / Present / CpuFlip
-                                                  |
-                                                  └─> [Presenter]  vk_presenter.cpp
-                                                        VideoOut flip queue consumption
-                                                        FSR upscaling pass
-                                                        Post-processing pass
-                                                        Swapchain / HDR management
-                                                        └─> SDL Window  src/sdl_window.cpp
+**Build:**
+```bash
+cmake -B build -DCMAKE_BUILD_TYPE=Release
+cmake --build build
 ```
 
----
+**Key subsystems:** `src/video_core/` (Vulkan renderer, buffer/texture cache, shader recompiler), `src/core/` (CPU emulation, kernel, 46 PS4 system libraries), `src/input/`, `src/imgui/`.
 
-## 3. Key Subsystem Notes
+**No automated test suite.** Verify changes via:
+- Vulkan validation layers (`VK_LAYER_KHRONOS_validation`)
+- Tracy profiler (enabled in Debug builds)
+- Game testing across multiple titles
 
-### Liverpool (GPU Command Processor)
-- PM4 packet decoder: type-2 (padding), type-3 (opcodes)
-- Coroutine task model: each queue submit becomes a `Task` (C++20 coroutine)
-- `GpuQueue` per ring: DCB + CCB `std::vector<u32>` with atomic offset tracking
-- `submit_mutex` + `submit_cv` guards all cross-thread state
-- `SendCommand<wait_done>()`: fast-path when already on GPU thread; otherwise semaphore-blocked
-
-### Shader Recompiler
-- Input: raw GCN ISA DWORD span from mapped game binary
-- `Pools`: `ObjectPool<IR::Inst>` (8192 cap) + `ObjectPool<IR::Block>` (32 cap) — pooled alloc per compile
-- `StageSpecialization`: captures runtime state that creates permutations
-- Key passes for Bloodborne: `resource_tracking_pass`, `ring_access_elimination`,
-  `lower_fp64_to_fp32`, `shared_memory_simplify_pass`
-
-### Texture Cache Tiling
-- GCN micro/macro tiling → linear via GPU compute shader (`host_shaders/tiling_comp.h`)
-- `TileManager::GetTilingPipeline()`: one-time JIT pipeline creation per (tile_mode × bpp) combo
-- `DetileImage()`: dispatches compute, returns `{out_buffer, 0}` — caller uploads to `vk::Image`
-
-### Pipeline Cache
-- `GraphicsPipelineKey` (large struct): stage hashes + color buffer formats + blend + depth + prim type
-- `tsl::robin_map<GraphicsPipelineKey, unique_ptr<GraphicsPipeline>>` — O(1) avg lookup
-- `program_cache`: `tsl::robin_map<u64 hash, unique_ptr<Program>>` — per shader binary
-- `Program::modules`: `small_vector<Module, 8>` — permutations (spec = runtime state delta)
+**Code style:** PascalCase functions/classes, snake_case variables, 100-char line limit, clang-format enforced.
 
 ---
 
-## 4. Performance Audit — Bottlenecks & Weak Points
+## Target Game
 
-### CRITICAL — Per-Draw-Call Overhead
-
-#### B1: Full pipeline key rebuild every draw (vk_pipeline_cache.cpp:340-431)
-**Location:** `PipelineCache::RefreshGraphicsKey()` called from every `Draw()` and `DrawIndirect()`
-**Problem:** `std::memset(&graphics_key, 0, sizeof(GraphicsPipelineKey))` clears and fully
-reconstructs the entire key from scratch on every draw call. There is **no dirty tracking** of GPU
-registers — even if nothing changed since the last draw, the full loop over 8 color buffers,
-all shader stages, blend controls, sample counts, etc. runs unconditionally.
-`RefreshGraphicsStages()` is called inside this function, which iterates all active pipeline stages.
-**Impact:** Every draw call in Bloodborne's deferred pipeline triggers this full rebuild.
-**Fix direction:** Track which register groups are dirty (context regs, SH regs, etc.) via
-a bitmask set when `SetContextReg`/`SetShReg` PM4 opcodes are processed. Skip `RefreshGraphicsKey`
-entirely if no relevant register has changed since the last pipeline lookup.
-
-#### B2: Linear scan for shader permutation match (vk_pipeline_cache.cpp:607)
-**Location:** `PipelineCache::GetProgram()` — `std::ranges::find(program->modules, spec, &Program::Module::spec)`
-**Problem:** Every call to `GetProgram()` for an existing cached shader does a **linear scan**
-over all permutations (up to 8) to check if the current `StageSpecialization` matches a cached
-module. Called once per active shader stage per draw. For a VS+PS draw = 2 linear scans.
-Permutation count is bounded at 8 so worst case is 8 comparisons, but `StageSpecialization::operator==`
-involves comparing non-trivial structs.
-**Fix direction:** Hash `StageSpecialization` and use an `unordered_map<spec_hash, module>` for O(1) lookup.
-
-#### B3: Two-pass resource binding per draw (vk_rasterizer.cpp:382-661)
-**Location:** `Rasterizer::BindResources()` → `BindBuffers()` + `BindTextures()`
-**Problem:** Both `BindBuffers` and `BindTextures` do a **first pass** to collect buffer/image IDs
-and a **second pass** to actually bind them. This is necessary for "needs_rebind" detection, but
-the vectors (`buffer_bindings`, `image_bindings`, `set_writes`, `buffer_infos`, `image_infos`)
-are **cleared and rebuilt from scratch** on every draw call (`set_writes.clear()`, etc.).
-These are dynamic allocations on hot paths.
-**Fix direction:** Pre-size with `reserve()` to known maximums once at construction;
-use a "generation counter" to mark stale bindings rather than clearing.
-
-#### B4: `bound_images` growing unbounded per draw (vk_rasterizer.cpp:129, 713)
-**Location:** `bound_images.emplace_back(...)` in `PrepareRenderState()` and `BindTextures()`
-**Problem:** `bound_images` is appended to per draw call but only cleared in `ResetBindings()`.
-If `ResetBindings()` is missed or delayed, it grows. Also means deferred layout transition
-tracking accumulates.
-
-#### B5: `fmt::format` string allocation on hot draw path (liverpool.cpp:432-479)
-**Location:** `ProcessGraphics()` — every `DrawIndex2`, `DrawIndexAuto`, `DrawIndexOffset2`, `DrawIndirect`
-when `host_markers_enabled`
-**Problem:** `fmt::format("gfx:{}:DrawIndex2", cmd_address)` performs a heap allocation on every
-draw call. Even when profiling is not active, the `Config::getVkHostMarkersEnabled()` branch is
-evaluated. For Bloodborne running thousands of draws per frame this is significant.
-**Fix direction:** This is already behind an `if (host_markers_enabled)` guard which is fast when
-disabled. Verify `Config::getVkHostMarkersEnabled()` returns `false` by default in release builds.
+**Bloodborne** — all performance and memory work is scoped to Bloodborne compatibility and behavior. Use it as the primary regression title for all changes. Observe VRAM growth, frame time, and hitching specifically during Bloodborne gameplay (Central Yharnam → Cleric Beast fight is a good benchmark scene).
 
 ---
 
-### HIGH — Synchronization Overhead
+## Performance Audit Findings
 
-#### B6: Round-robin queue poll over all 57 queues (liverpool.cpp:110-136)
-**Location:** `Liverpool::Process()` inner loop
-**Problem:** The scheduler iterates `curr_qid = (curr_qid + 1) % num_mapped_queues` through
-**all** mapped queues on every pass — including 56 compute queues that are typically empty.
-For each queue, it acquires `queue.m_access` lock, checks `submits.empty()`, and continues.
-For Bloodborne's heavy async compute usage with multiple active compute queues, most passes
-will hit only 1-3 active queues but still check all others.
-Additionally, `submit_cv.notify_all()` wakes all waiters on task completion — wasteful when
-only one waiter needs the signal.
-**Fix direction:** Maintain a separate "active queues" bitmask (fits in `u64`, `NumTotalQueues < 64`
-is already static-asserted). Iterate only active queues; clear the bit on queue drain.
-Replace `notify_all()` with `notify_one()` unless multiple specific waiters are expected.
+Audit date: 2026-03-06. Analyzed the Vulkan rendering hot path (per-draw and per-frame operations). Scoped to Bloodborne.
 
-#### B7: Two nested lock acquisitions per task in the scheduler (liverpool.cpp:119-135)
-**Location:** `Liverpool::Process()` — task done branch
+### Phase 0: Critical Bug
+
+#### 0.1 Buffer Cache Garbage Collector Is Dead Code
+
+**Files:** `src/video_core/buffer_cache/buffer_cache.cpp:841-864`, `src/common/lru_cache.h:57`
+
+The `RunGarbageCollector()` function defines a `clean_up` lambda (line 854) that calls `DownloadBufferMemory` and `DeleteBuffer`, but **never invokes it**. The LRU cache provides `ForEachItemBelow(tick, func)` (lru_cache.h:57) specifically designed for this purpose. The buffer cache inserts into the LRU (line 623) and touches it (line 867), but GC never iterates it.
+
+**Consequence:** GPU buffers are never evicted. VRAM grows monotonically until OOM. The `trigger_gc_memory`, `critical_gc_memory`, `aggressive` flag, and `max_deletions` limiter are all dead logic.
+
+**Fix:** After the early return at line 849, add:
 ```cpp
-std::scoped_lock lock{queue.m_access};   // first lock
-queue.submits.pop();
---num_submits;
-std::scoped_lock lock2{submit_mutex};    // second lock INSIDE first lock scope
-submit_cv.notify_all();
+lru_cache.ForEachItemBelow(gc_tick - ticks_to_destroy, clean_up);
 ```
-**Problem:** Acquiring `submit_mutex` while holding `queue.m_access` creates a nested lock.
-This is a potential priority inversion / contention point: the GPU submission thread holds
-`queue.m_access` while the CPU submit path needs `submit_mutex`, and vice versa.
-**Fix direction:** Release `queue.m_access` before acquiring `submit_mutex`.
-Decrement `num_submits` atomically without the submit mutex.
 
-#### B8: `DownloadBufferMemory` blocks GPU thread via SendCommand<true> (buffer_cache.cpp:85-88)
-**Location:** `BufferCache::ReadMemory()` → `liverpool->SendCommand<true>()`
-**Problem:** `SendCommand<wait_done=true>` posts a lambda and then acquires a `binary_semaphore`
-waiting for the GPU thread to execute and signal it. This means the CPU fault handler **blocks**
-until the GPU thread processes the command — a synchronous CPU→GPU→CPU round-trip on every
-buffer readback / memory validation event.
-**Fix direction:** Use `SendCommand<false>` (async) where coherency permits; only use the
-blocking form when the result is immediately required.
+**Status:** Done
 
 ---
 
-### HIGH — Texture Cache / Tiling
+### Phase 1: Low-Risk, High-Impact
 
-#### B9: VMA buffer allocation per detile operation (tile_manager.cpp:189)
-**Location:** `TileManager::DetileImage()` — `GetScratchBuffer(info.guest_size)`
-**Problem:** Every tiled texture upload creates a fresh `vmaCreateBuffer` allocation for the
-scratch detiling buffer. VMA is efficient, but repeated small allocations for the same sizes
-accumulate overhead and cause fragmentation. The buffer is deferred-destroyed after GPU work,
-so it has short lifetime but high frequency.
-**Fix direction:** Pool scratch buffers by size bucket (e.g., round up to power-of-2, keep a
-`std::vector<ScratchBuffer>` free-list per size class). Recycle after the deferred destroy fires.
+#### 1.1 O(n) Linear Search in Vertex Buffer Binding
 
-#### B10: XXH3 hash on every `MarkAsMaybeDirty` (texture_cache.cpp:136)
-**Location:** `TextureCache::MarkAsMaybeDirty()`
-**Problem:** `XXH3_64bits(addr, image.info.guest_size)` hashes the full texture data on the CPU
-when a page fault occurs. For large textures (Bloodborne's 2K/4K render targets) this is a
-significant CPU stall in the fault handler — which runs in the guest execution context.
-**Fix direction:** Only hash on first access (already gated by `if (image.hash == 0)`);
-consider coarser dirty detection (page-level bitmask) instead of full content hash.
+**File:** `src/video_core/buffer_cache/buffer_cache.cpp:223-229`
 
-#### B11: Global texture cache mutex on every lookup (texture_cache.cpp:143, 173)
-**Location:** `TextureCache::InvalidateMemory()`, `InvalidateMemoryFromGPU()`, and
-`TextureCache::FindImage()` all take `std::scoped_lock lock{mutex}` (exclusive)
-**Problem:** The texture cache uses a **single global exclusive mutex** for all access.
-`FindImage()` is called multiple times per draw (once per color buffer + depth + all texture
-bindings). Any concurrent CPU write fault (via `InvalidateMemory`) contends with the GPU draw
-thread.
-**Analysis note (revised):** The `shared_mutex` upgrade originally proposed here is **not correct**
-— `FindImage()` is a write operation (it calls `FreeImage`, `ExpandImage`, `InsertImage` inside
-`ResolveOverlap`). Similarly `UpdateImage` (called by `FindTexture`/`FindRenderTarget`) calls
-`TrackImage` and `RefreshImage` — all writes. Every locked path modifies shared state, so there
-are no read-only callers that could take a shared lock.
-**Correct fix direction:** Make `InvalidateMemory()` (called from the CPU SIGSEGV handler)
-non-blocking by posting to a lock-free MPSC queue. The GPU thread drains this queue at the start
-of `FindImage()` or in `OnSubmit()`, eliminating the cross-thread mutex contention. This is a
-larger architectural change, deferred to a dedicated session.
+In `BindVertexBuffers()`, after sorting and merging vertex buffer ranges (lines 191-206), the code uses `std::ranges::find_if` to linearly search `ranges_merged` for each guest buffer. Since `ranges_merged` is already sorted by `base_address`, this should use binary search.
 
----
+**Impact:** Up to 32 buffers × 32 merged ranges = 1024 comparisons per draw call × hundreds of draws per frame.
 
-### MEDIUM — Pipeline & Shader
-
-#### B12: `RefreshComputeKey` always rebuilds (vk_pipeline_cache.cpp:534-541)
-**Location:** `PipelineCache::RefreshComputeKey()`
-**Problem:** Called on every `DispatchDirect()` / `DispatchIndirect()`. No check whether
-`cs_pgm` changed since last call. Bloodborne issues many async compute dispatches.
-**Fix direction:** Same dirty-tracking approach as B1 — hash or compare `cs_pgm` state;
-skip `GetProgram()` if unchanged.
-
-#### B13: `BuildRuntimeInfo` rebuilt per draw (vk_pipeline_cache.cpp:90-223)
-**Location:** Called inside `GetProgram()` → inside `RefreshGraphicsStages()` → inside `RefreshGraphicsKey()`
-**Problem:** `BuildRuntimeInfo` fills a `Shader::RuntimeInfo` struct from GPU registers for each
-active stage. This includes `MapOutputs()` which iterates clip/cull distance bits. Called
-redundantly when registers haven't changed.
-
-#### B14: Pipeline layout created per `GraphicsPipeline` instance (vk_graphics_pipeline.cpp:65-68)
-**Location:** `GraphicsPipeline::GraphicsPipeline()` constructor
-**Problem:** A new `vk::PipelineLayout` is created for every unique pipeline. Since the push
-constant range and descriptor set layout are uniform across all graphics pipelines (single unified
-binding model), a shared `PipelineLayout` would avoid redundant Vulkan object creation.
-
----
-
-### MEDIUM — Bloodborne-Specific Patterns
-
-#### B15: `ResolveOverlap` teardown cost during RT aliasing (texture_cache.cpp:242-281)
-**Location:** `TextureCache::ResolveOverlap()` — `recreate` branch
-**Problem:** Bloodborne's deferred pipeline aggressively aliases render targets (same physical
-memory reused for different formats/purposes). Each alias resolution may:
-1. Create a new `vk::Image` (`slot_images.insert()`)
-2. Issue a `CopyImage` or `CopyImageWithBuffer` GPU blit
-3. Call `FreeImage()` on the old image
-This is an expensive sequence on a per-draw-call basis during heavy render target reuse.
-**Fix direction:** Track known-safe alias pairs to avoid repeated recreate; cache the overlap
-resolution result by address + format pair for the duration of a frame.
-
-#### B16: Async compute queue fairness (liverpool.cpp:110-136)
-**Location:** `Liverpool::Process()` round-robin scheduler
-**Problem:** The simple `% num_mapped_queues` round-robin does not implement GCN's priority
-system (GFX queue is higher priority than ASC queues). Bloodborne uses async compute to overlap
-shadow map generation and lighting with geometry rendering. If an ASC queue stalls the GFX queue
-(by consuming all `resume()` budget before GFX gets another turn), frame time increases.
-**Fix direction:** Process the GFX queue first, then round-robin compute queues; or implement
-the GCN priority scheme (GFX = highest, compute pipes have configurable priority).
-
-#### B17: `ProcessCommands()` called at top of every PM4 opcode iteration (liverpool.cpp:111, 156, 237)
-**Location:** Inside `ProcessGraphics()` and `ProcessCeUpdate()` while loops
-**Problem:** `ProcessCommands()` drains the `command_queue` (rasterizer SendCommand calls).
-It is called at the head of every single PM4 packet loop iteration — acquiring and releasing
-`submit_mutex` even when `num_commands == 0`.
+**Fix:** Replace with `std::ranges::upper_bound` + `std::prev`:
 ```cpp
-void ProcessCommands() {
-    while (num_commands) {   // fast exit if 0, but lock still checked
+const auto it = std::ranges::upper_bound(
+    ranges_merged, buffer.base_address, std::less{}, &BufferRange::base_address);
+ASSERT(it != ranges_merged.begin());
+const auto host_buffer_info = std::prev(it);
 ```
-Since `num_commands` is `std::atomic<u32>`, the read is cheap, but the branch is still taken
-hundreds of times per frame for every NOP, SetContextReg, etc.
-**Fix direction:** Load `num_commands` once before the PM4 loop and only call `ProcessCommands`
-when non-zero; or move it to yield points only.
+
+**Status:** Done
 
 ---
 
-### LOW — Minor Issues
+### Phase 2: Medium-Risk, High-Impact
 
-#### B18: `std::queue<Task::Handle>` in GpuQueue (liverpool.h:195)
-`std::queue` uses `std::deque` internally — heap-allocated nodes with poor cache locality.
-For the GFX queue (always active), a small fixed-size ring buffer would be more cache-friendly.
+#### 2.1 Overly Broad Pipeline Barriers
 
-#### B19: `DescriptorHeapSizes` eStorageBuffer = 8192 (vk_pipeline_cache.cpp:34)
-The descriptor pool pre-allocates 8192 storage buffer descriptors. If Bloodborne's shaders
-use fewer, this is wasted reserved memory. Profile and right-size.
+**File:** `src/video_core/buffer_cache/buffer_cache.cpp:325-377` (CopyBuffer), `659-678` (SynchronizeBuffer)
 
-#### B20: `std::vector<u32>` for DCB/CCB buffers in GpuQueue (liverpool.h:193-194)
-DCB and CCB buffers grow dynamically. `ReserveCopyBufferSpace()` pre-reserves 2MB/4 = 512K dwords.
-A power-of-2 aligned reservation would reduce realloc frequency on initial frames.
+Multiple barrier sites use `vk::PipelineStageFlagBits2::eAllCommands` for both src and dst stages. This creates full pipeline drains, preventing the GPU driver from overlapping transfer work with unrelated graphics/compute work.
 
-#### B21: `SetObjectName` called in release builds (vk_pipeline_cache.cpp:568, 145)
-`Vulkan::SetObjectName` wraps `vkSetDebugUtilsObjectNameEXT` — this is a no-op when validation
-layers are absent but still makes the Vulkan call. Should be gated on a compile-time debug flag.
+**Fix:** Narrow to specific stages:
+- Pre-barrier src: `eAllGraphics | eComputeShader` (stages that read/wrote the buffer)
+- Pre-barrier dst: `eTransfer`
+- Post-barrier src: `eTransfer`
+- Post-barrier dst: `eAllGraphics | eComputeShader`
 
----
+Also clean up redundant access masks in SynchronizeBuffer pre-barrier (lines 661-663) where `eTransferRead | eTransferWrite` are redundant with `eMemoryRead | eMemoryWrite`.
 
-## 5. Priority Matrix for Bloodborne
+**Verification:** MUST run with Vulkan synchronization validation (`syncval`) and achieve zero errors.
 
-| # | Bottleneck | Impact | Difficulty | Priority | Status |
-|---|-----------|--------|-----------|---------|--------|
-| B1 | Pipeline key rebuild every draw | Very High | Medium | P0 | **DONE** |
-| B6 | Round-robin over all 57 queues | High | Low | P0 | **DONE** |
-| B7 | Nested locks in task completion | Medium | Low | P0→fixed with B6 | **DONE** |
-| B11 | Global exclusive texture cache mutex | High | Hard | P0→revised | deferred (needs MPSC queue) |
-| B3 | Two-pass resource binding per draw | High | Medium | P1 | deferred (static_vector .clear() is O(1); rebuild is fundamentally needed per draw) |
-| B9 | VMA alloc per detile | High | Low | P1 | **DONE** |
-| B2 | Linear permutation scan per draw | Medium | Low | P1 | **DONE** |
-| B8 | Blocking SendCommand in fault handler | Medium | Medium | P1 | **DONE** |
-| B10 | XXH3 hash in fault handler | Medium | Medium | P2 | **DONE** (subset hash in MarkAsMaybeDirty) |
-| B15 | RT aliasing recreate cost | High (BB) | Hard | P2 | deferred (needs image aliasing architecture) |
-| B16 | Async compute queue fairness | High (BB) | Medium | P2 | **DONE** (GFX priority after compute slice) |
-| B17 | ProcessCommands every PM4 opcode | Low-Med | Low | P2 | **DONE** (if (num_commands) guard) |
-| B12 | Compute key always rebuilt | Medium | Low | P2→fixed with B1 | **DONE** |
-| B13 | BuildRuntimeInfo per draw | Medium | Low | P3 | **DONE** (covered by B1 fast-path; BuildRuntimeInfo not called when dirty=false && valid=true) |
-| B14 | PipelineLayout per pipeline | Low | Low | P3 | N/A — descriptor set layout varies per pipeline (built from actual shader buffer/image/sampler counts via BuildDescSetLayout); a shared layout is not possible without a worst-case uber-layout |
-| B18 | std::deque in GpuQueue | Low | Low | P3 | N/A — GpuQueue holds ≤1 handle at a time (SubmitGfx blocks until num_submits==0); std::deque overhead is negligible |
-| BufferGC | BufferCache::RunGarbageCollector never freed anything | CRITICAL | Low | P0 | **DONE** — clean_up lambda was defined but lru_cache.ForEachItemBelow never called; buffers accumulated indefinitely |
-| SFX-1 | RT FindImage per particle draw | High (SFX) | Low | P2 | **DONE** (CachedRTInfo skips FindImage/mutex for repeated RT; IsImageAllocated guard) |
-| SFX-2 | Texture FindImage per particle draw | High (SFX) | Low | P2 | **DONE** (tex_lookup_cache robin_map skips FindImage; cleared on submit) |
-| SFX-3 | UpdateImage mutex per texture per draw | High (SFX) | Low | P2 | **DONE** (fast path: no mutex when image clean+fully tracked; only LRU touch) |
+**Status:** Done — narrowed all `eAllCommands` in CopyBuffer, SynchronizeBuffer, WriteDataBuffer, and JoinBuffers to `eAllGraphics | eComputeShader`.
+
+#### 2.2 Duplicate FindImage Calls Per Draw
+
+**File:** `src/video_core/renderer_vulkan/vk_rasterizer.cpp:679` (BindTextures), `129,141` (PrepareRenderState)
+
+`TextureCache::FindImage()` acquires a mutex, walks an interval map, and performs linear scans through image lists. When the same physical texture is bound to multiple slots (shadow maps, cubemaps, mipgen), the full lookup repeats.
+
+**Fix:** Add a per-bind-call dedup cache:
+```cpp
+boost::container::small_vector<std::pair<VAddr, ImageId>, 16> image_dedup;
+```
+Before each `FindImage`, check `image_dedup` for matching address. Insert result on miss.
+
+**Status:** Done (already implemented)
 
 ---
 
-## 6. Recommended Investigation Tools
+### Phase 3: Medium-Risk, Moderate-Impact
 
-- **RenderDoc** — already integrated (`src/video_core/renderdoc.cpp`); use for frame capture to count
-  draw calls, RT switches, and compute dispatches per Bloodborne frame
-- **Tracy** — already integrated (`TRACY_GPU_ENABLED`); use for CPU/GPU timeline correlation
-  to find sync stalls between Liverpool and Rasterizer threads
-- **Vulkan Validation Layers** — already gated via `vk_instance.cpp`
-- **VTune / perf** — profile `Liverpool::Process()` and `RefreshGraphicsKey()` CPU time
+#### 3.1 O(n) ResetBindings Per Draw
+
+**File:** `src/video_core/renderer_vulkan/vk_rasterizer.h:106-111`
+
+`ResetBindings()` iterates all bound images and clears their binding info via cache-unfriendly random writes into the texture cache slot pool. Called every draw call.
+
+**Fix:** Replace with generation counter. Add `u32 current_bind_generation` to Rasterizer and `u32 bind_generation` to Image binding. `is_bound` becomes `image.bind_generation == current_bind_generation`. Reset becomes `++current_bind_generation; bound_images.clear()` — O(1).
+
+The `is_target` flag needs separate handling via a small fixed-size array indexed by render target slot (max 9 entries).
+
+**Status:** Done (already implemented via `AdvanceBindGeneration()` + `bind_gen` field)
+
+#### 3.2 Dirty Flags Bitmask Consolidation
+
+**File:** `src/video_core/renderer_vulkan/vk_scheduler.h:88-121`, `vk_scheduler.cpp:199-356`
+
+`DynamicState::Commit()` checks 26 individual `bool` dirty flags per draw call. The common case (most clean) still evaluates many branches.
+
+**Fix:** Replace bitfield struct with `u32 dirty_flags` enum:
+```cpp
+enum DirtyBit : u32 {
+    Viewports = 1u << 0,
+    Scissors  = 1u << 1,
+    // ...
+};
+```
+Benefits: early-out when `dirty_flags == 0`, grouped checks with masks, single-instruction clear.
+
+**Status:** Done (already implemented)
 
 ---
 
-## 7. Key File Reference
+### Phase 4: Higher-Risk, High-Impact
 
-| File | Purpose | Lines |
-|------|---------|-------|
-| `src/video_core/amdgpu/liverpool.cpp` | GPU command processor, PM4 decode | 1237 |
-| `src/video_core/renderer_vulkan/vk_rasterizer.cpp` | Draw/dispatch, resource binding | 1325 |
-| `src/video_core/renderer_vulkan/vk_pipeline_cache.cpp` | Pipeline + shader cache | 695 |
-| `src/video_core/renderer_vulkan/vk_scheduler.cpp` | Command buffer + submission | ~200 |
-| `src/video_core/texture_cache/texture_cache.cpp` | Image tracking, dirty detection | ~600 |
-| `src/video_core/texture_cache/tile_manager.cpp` | GCN detiling | ~300 |
-| `src/video_core/buffer_cache/buffer_cache.cpp` | Vertex/uniform buffer cache | ~800 |
-| `src/video_core/buffer_cache/fault_manager.cpp` | GPU fault-based invalidation | ~200 |
-| `src/shader_recompiler/recompiler.cpp` | GCN→IR translation entry | 98 |
-| `src/core/libraries/gnmdriver/gnmdriver.cpp` | GNM HLE, sceGnm* calls | large |
-| `src/video_core/amdgpu/regs.h` | Full GCN register file model | large |
-| `src/video_core/renderer_vulkan/liverpool_to_vk.h/.cpp` | GCN enum → Vulkan enum | ~300 |
+#### 4.1 Async Pipeline Compilation
+
+**File:** `src/video_core/renderer_vulkan/vk_pipeline_cache.h`
+
+Pipeline compilation (`vkCreateGraphicsPipelines` / `vkCreateComputePipelines`) runs synchronously on the render thread. New shaders cause 10-100ms frame hitches.
+
+**Fix:** Add compilation thread pool (2-4 threads). On cache miss, enqueue job and return `nullptr`. Rasterizer skips draw when pipeline unavailable. Next frame uses compiled result. Make opt-in via config.
+
+**Risks:** Visible pop-in, thread safety for `tsl::robin_map` caches, game compatibility.
+
+**Status:** Done (already implemented) — 2-thread pool gated by `Config::getAsyncShaderCompilation()`, with `CompileThreadFunc`, `FlushCompletedPipelines`, dedup via `enqueued_graphics`/`enqueued_compute` maps, and proper shutdown.
+
+#### 4.2 InsertPermut Reallocation Guard
+
+**File:** `src/video_core/renderer_vulkan/vk_pipeline_cache.h:66`
+
+`modules.resize(std::max(modules.size(), perm_idx + 1))` can cause heap allocation when `perm_idx >= MaxPermutations(8)` and default-constructs intermediate elements.
+
+**Fix:** Add `ASSERT(perm_idx < MaxPermutations)` and pre-reserve.
+
+**Status:** Done (already implemented)
+
+---
+
+## Performance Optimization Roadmap
+
+| # | Issue | File(s) | Risk | Impact | Effort | Status |
+|---|-------|---------|------|--------|--------|--------|
+| 0.1 | Dead GC (memory leak bug) | `buffer_cache.cpp:841` | Very Low | Critical | 1 line | Done |
+| 1.1 | O(n) vertex buffer lookup | `buffer_cache.cpp:223` | Very Low | Medium-High | 3 lines | Done |
+| 2.1 | Broad pipeline barriers | `buffer_cache.cpp:326,659` | Medium | High | ~20 lines | Done |
+| 2.2 | Duplicate FindImage calls | `vk_rasterizer.cpp:679` | Medium | Medium | ~15 lines | Done |
+| 3.1 | O(n) ResetBindings | `vk_rasterizer.h:106` | Medium | Medium | ~20 lines | Done |
+| 3.2 | Dirty flags bitmask | `vk_scheduler.h:88` | Low | Low-Medium | ~50 lines | Done |
+| 4.1 | Async pipeline compilation | `vk_pipeline_cache.h` | High | High | ~200+ lines | Done |
+| 4.2 | InsertPermut guard | `vk_pipeline_cache.h:66` | Very Low | Low | 2 lines | Done |
+
+All items except 4.1 (async pipeline compilation) are complete. Item 4.1 is a standalone feature requiring ~200+ lines, thread pool infrastructure, and careful thread safety work.
+
+---
+
+## Existing Good Patterns (Preserve)
+
+- `tsl::robin_map` for O(1) pipeline lookups (`vk_pipeline_cache.h:131-133`)
+- `boost::container::static_vector` / `small_vector` for stack-allocated containers
+- `boost::icl::interval_map` for memory range tracking (`range_set.h`)
+- LRU cache design (`common/lru_cache.h`) — correct structure, broken call site
+- Dirty flag system for dynamic state — avoids redundant Vulkan commands
+- Stream buffers for small read-only data (`buffer_cache.cpp:383`)
+- Tracy GPU profiling integration (`vk_scheduler.cpp:17-18`)
+- Multi-level page table for O(1) address lookups (`multi_level_page_table.h`)
+
+---
+
+## Memory Leak Audit
+
+Audit date: 2026-03-06. Scoped to Bloodborne. Focus: VRAM and heap growth over a 30-minute play session from the Hunter's Dream through Central Yharnam to the Cleric Beast fight.
+
+### ML-1: ShaderModule Handles Leaked at Shutdown
+
+**File:** `src/video_core/renderer_vulkan/vk_pipeline_cache.cpp:295`, `vk_shader_util.cpp:257`
+
+`CompileSPV()` returns a raw `vk::ShaderModule` (not `vk::UniqueShaderModule`). These handles are stored in `Program::modules` inside `program_cache`. `~PipelineCache()` never iterates `program_cache` to call `device.destroyShaderModule()`. Hundreds of shader modules are silently leaked at emulator shutdown.
+
+**Impact:** Shutdown-time leak only — no per-session growth. However it generates Vulkan validation errors (`VUID-vkDestroyDevice-device-05137`) and is trivially fixable.
+
+**Fix:** Add to `~PipelineCache()` after joining threads:
+```cpp
+const auto& device = instance.GetDevice();
+for (const auto& [_, program] : program_cache) {
+    for (const auto& m : program->modules) {
+        if (m.module) {
+            device.destroyShaderModule(m.module);
+        }
+    }
+}
+```
+
+**Status:** Done
+
+---
+
+### ML-2: Texture Cache GC Blind Spot — `trigger_gc_memory = 0` Path
+
+**File:** `src/video_core/texture_cache/texture_cache.cpp:35-38, 969-973`
+
+When `instance.CanReportMemoryUsage()` is false (driver doesn't support `VK_EXT_memory_budget`), `trigger_gc_memory` is set to `0`. At line 972, `if (total_used_memory < trigger_gc_memory)` becomes `if (0 < 0)` — always false — so GC *always* runs every frame regardless of memory pressure, burning CPU time each submit for the no-op case when `total_used_memory` (accumulated via `guest_size` estimates) is also 0 at startup.
+
+More critically, when the driver *does* support `memory_budget`, `GetDeviceMemoryUsage()` overwrites the estimated `total_used_memory` (line 970). If the driver reports less usage than the estimate (e.g. memory-compressed formats), `trigger_gc_memory` may never be reached, silently preventing all GC.
+
+**Impact:** Either always-running GC (wasted CPU) or never-running GC (growing VRAM) depending on driver. For Bloodborne on AMD/Intel without `memory_budget`, GC runs every frame but `ticks_to_destroy=16` is fine. On NVIDIA (which does report `memory_budget`), verify GC actually fires under real VRAM pressure.
+
+**Fix:** Add a fallback estimator: when `CanReportMemoryUsage()` is false, use `total_used_memory` (the `guest_size`-accumulated counter) rather than replacing it with 0 at the check site.
+
+**Status:** Done — `trigger_gc_memory` now set to `DEFAULT_TRIGGER_GC_MEMORY` (768 MB) in the no-`memory_budget` path. Added named constant to `texture_cache.h`.
+
+---
+
+### ML-3: Texture Cache `image_map` and `page_table` — Vector Capacity Never Trimmed
+
+**File:** `src/video_core/texture_cache/texture_cache.cpp:831, 839-854`
+
+`page_table[page]` is a `vector<ImageId>`. Images are registered with `push_back` (line 831) and unregistered with `erase` (line 853). After a burst of image creation/destruction (e.g. Bloodborne's loading screens create/destroy hundreds of render targets), vectors for heavily-used pages accumulate high `capacity` without ever shrinking. Across a 4 KB page table covering a 4 GB address space, this can accumulate MB of fragmented `vector` storage.
+
+**Fix:** After `erase`, `shrink_to_fit()` when the vector becomes empty:
+```cpp
+if (image_ids.empty()) {
+    image_ids.shrink_to_fit();
+}
+```
+
+**Status:** Done
+
+---
+
+### ML-4: `surface_metas` Map Grows Without Dedicated GC
+
+**File:** `src/video_core/texture_cache/texture_cache.cpp:670, 676, 692, 1044-1050`
+
+`surface_metas` (a `tsl::robin_map`) entries for CMASK/FMASK/HTILE addresses are only removed inside `DeleteImage()`. However, `FreeImage()` → `DeleteImage()` is only called from GC or explicit invalidation. If images are never freed (e.g. VRAM usage stays below `trigger_gc_memory`), `surface_metas` grows monotonically with every unique render target surface seen. Bloodborne uses dozens of unique render target configurations per scene transition.
+
+**Impact:** Unbounded growth during normal play on machines with large VRAM (e.g. 16+ GB GPUs where GC never triggers). Each entry is ~64 bytes; 10,000 entries = ~640 KB, non-trivial over a long session.
+
+**Fix:** This is fundamentally tied to fixing ML-2 (ensuring GC runs). Additionally, consider a `surface_metas.max_load_factor(0.5)` or periodic sweep to remove entries whose associated image no longer exists.
+
+**Status:** Done — added periodic sweep every 512 GC ticks in `RunGarbageCollector()`. Builds valid meta address set from all live images, prunes stale entries.
+
+---
+
+### ML-5: `UnmapMemory` Skips Image Data Download
+
+**File:** `src/video_core/texture_cache/texture_cache.cpp:197`
+
+`TextureCache::UnmapMemory()` frees images without downloading their data back to host memory (the `TODO` at line 197). When the PS4 game unmaps and remaps a virtual address range — which Bloodborne does during scene transitions — any dirty GPU-side image data is discarded silently. This causes visual corruption (textures go black or show stale data).
+
+**Impact:** Correctness bug that may explain texture corruption in Bloodborne. Not a memory leak per se but is the root cause of one class of image re-creation churn (game unmaps → remaps → emulator creates new images → old images linger in GC queue).
+
+**Fix:** Before `FreeImage(id)`, check `image.usage.transfer_src` and issue a readback if dirty:
+```cpp
+for (const ImageId id : deleted_images) {
+    auto& image = slot_images[id];
+    if (image.flags & ImageFlagBits::GpuModified) {
+        DownloadImageMemory(id);
+    }
+    FreeImage(id);
+}
+```
+
+**Status:** Done — `DownloadImageMemory(id)` called unconditionally before `FreeImage` (the function already guards on `GpuModified` internally).
+
+---
+
+### ML-6: `ObjectManager<T>` Raw `new` Without Destructor Cleanup
+
+**File:** `src/core/libraries/np/object_manager.h:28, 47`
+
+`ObjectManager` stores raw `T*` pointers via `new T{args...}` (line 28) and frees them via `delete obj` (line 47). The struct itself has no destructor — if the game exits without calling the corresponding `DeleteObject` for every `CreateObject`, all allocated objects leak. This affects `np_tus.cpp` (`NpTusRequest`, `NpTusTitleContext`) and potentially other users.
+
+**Fix:** Add a destructor to `ObjectManager`:
+```cpp
+~ObjectManager() {
+    std::scoped_lock lk{mutex};
+    for (auto* obj : objects) {
+        delete obj;
+    }
+}
+```
+
+**Status:** Done
+
+---
+
+### Memory Leak Roadmap
+
+| # | Issue | File(s) | Type | Impact | Effort | Status |
+|---|-------|---------|------|--------|--------|--------|
+| ML-1 | ShaderModule handles not destroyed | `vk_pipeline_cache.cpp:295` | Shutdown leak | Low (VK validation) | ~8 lines | Done |
+| ML-2 | Texture GC trigger logic broken | `texture_cache.cpp:35,972` | Logic bug → no GC | High (VRAM growth) | ~10 lines | Done |
+| ML-3 | Page table vector capacity not trimmed | `texture_cache.cpp:831,853` | Heap fragmentation | Medium | ~3 lines | Done |
+| ML-4 | `surface_metas` grows without GC | `texture_cache.cpp:670` | Unbounded map | Medium | ~20 lines | Done |
+| ML-5 | `UnmapMemory` drops dirty image data | `texture_cache.cpp:197` | Correctness + churn | High (visual bugs) | ~10 lines | Done |
+| ML-6 | `ObjectManager` no destructor | `object_manager.h:28` | Shutdown leak | Low (NP libs) | ~5 lines | Done |
+
+**Suggested order:** ML-2 first (gates ML-4, fixes VRAM growth), then ML-5 (correctness, reduces image churn), then ML-1+ML-6 together (shutdown cleanup), then ML-3+ML-4 (polish).
+
+---
+
+## Measurement Protocol
+
+1. **Baseline:** Bloodborne. Record 60-second Tracy captures in Central Yharnam. Extract: mean/P99 frame time, GPU active time, VRAM usage (via `VK_EXT_memory_budget` if available), draw calls/frame.
+2. **Memory baseline:** 30-minute session, sample VRAM every 60 seconds. Establish growth rate before any fix.
+3. **Per-change:** Apply single fix, re-record identical captures. Reject if P99 regresses >5%.
+4. **Validation:** Zero new Vulkan validation errors (`VK_LAYER_KHRONOS_validation`). Synchronization validation for barrier changes.
+5. **Regression:** Boot + first interactive scene. Watch for texture corruption, especially after scene transitions (ML-5 area).
+6. **Memory verification:** After ML-2 fix, confirm VRAM stabilizes within 5 minutes of play (no monotonic growth).

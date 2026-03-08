@@ -1,6 +1,8 @@
 // SPDX-FileCopyrightText: Copyright 2024 shadPS4 Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include <unordered_set>
+
 #include <xxhash.h>
 
 #include "common/assert.h"
@@ -33,11 +35,10 @@ TextureCache::TextureCache(const Vulkan::Instance& instance_, Vulkan::Scheduler&
 
     // Set up garbage collection parameters.
     if (!instance.CanReportMemoryUsage()) {
-        // Without VK_EXT_memory_budget, total_used_memory is tracked via RegisterImage /
-        // UnregisterImage (sum of guest_size for all live images). Use it as a proxy for
-        // VRAM pressure. Setting trigger_gc_memory = 0 made GC acquire the global mutex on
-        // every single submit, causing severe per-submit stalls.
-        trigger_gc_memory = DEFAULT_PRESSURE_GC_MEMORY / 2; // ~768 MB
+        // Driver does not support VK_EXT_memory_budget. total_used_memory is accumulated
+        // from guest_size estimates. Set a non-zero trigger so GC is demand-driven rather
+        // than firing every frame (trigger_gc_memory=0 would make u64 < 0 always false).
+        trigger_gc_memory = DEFAULT_TRIGGER_GC_MEMORY;
         pressure_gc_memory = DEFAULT_PRESSURE_GC_MEMORY;
         critical_gc_memory = DEFAULT_CRITICAL_GC_MEMORY;
         return;
@@ -140,12 +141,7 @@ void TextureCache::MarkAsMaybeDirty(ImageId image_id, Image& image) {
         const u8* addr = std::bit_cast<u8*>(image.info.guest_address);
         const u32 sw = std::min(image.info.size.width, u32(8));
         const u32 sh = std::min(image.info.size.height, u32(8));
-        // Clamp to at least 32 bytes: for block-compressed formats the shift formula
-        // produces only 4 bytes (8×8×8 >> 7), which gives too few distinct values and
-        // causes false "no-change" hits between different BC textures on the same page.
-        const u32 size =
-            std::max((sw * sh * image.info.num_bits) >> (3 + (image.info.props.is_block ? 4 : 0)),
-                     32u);
+        const u32 size = sw * sh * image.info.num_bits >> (3 + image.info.props.is_block ? 4 : 0);
         const u64 init_hash = XXH3_64bits(addr, size);
         image.hash = init_hash != 0 ? init_hash : 1ull; // guarantee non-zero
     }
@@ -185,21 +181,16 @@ void TextureCache::InvalidateMemory(VAddr addr, size_t size) {
 }
 
 void TextureCache::InvalidateMemoryFromGPU(VAddr address, size_t max_size) {
-    // Only images whose guest_address == address need marking dirty. Since guest_address is the
-    // image base, it always sits on the single page at (address >> PageBits). Avoid iterating
-    // all pages in [address, address+max_size) — a direct single-page lookup is sufficient and
-    // avoids O(max_size / page_size) iterations for large compute write buffers.
     std::scoped_lock lock{mutex};
-    const auto* page_entry = page_table.find(address >> Traits::PageBits);
-    if (!page_entry) {
-        return;
-    }
-    for (const ImageId image_id : *page_entry) {
-        Image& image = slot_images[image_id];
-        if (image.info.guest_address == address) {
-            image.flags |= ImageFlagBits::GpuDirty;
+    ForEachImageInRegion(address, max_size, [&](ImageId image_id, Image& image) {
+        // Only consider images that match base address.
+        // TODO: Maybe also consider subresources
+        if (image.info.guest_address != address) {
+            return;
         }
-    }
+        // Ensure image is reuploaded when accessed again.
+        image.flags |= ImageFlagBits::GpuDirty;
+    });
 }
 
 void TextureCache::UnmapMemory(VAddr cpu_addr, size_t size) {
@@ -208,7 +199,7 @@ void TextureCache::UnmapMemory(VAddr cpu_addr, size_t size) {
     ImageIds deleted_images;
     ForEachImageInRegion(cpu_addr, size, [&](ImageId id, Image&) { deleted_images.push_back(id); });
     for (const ImageId id : deleted_images) {
-        // TODO: Download image data back to host.
+        DownloadImageMemory(id);
         FreeImage(id);
     }
 }
@@ -493,10 +484,10 @@ std::tuple<ImageId, int, int> TextureCache::ResolveOverlap(const ImageInfo& imag
             if (auto slice = cache_image.info.SliceOf(image_info, mip); slice >= 0) {
                 // We have a larger image created and a separate one, representing a subres of it
                 // bound as render target. In this case we need to rebind render target.
-                if (cache_image.binding.is_target) {
+                if (cache_image.binding.target_gen == bind_generation) {
                     cache_image.binding.needs_rebind = 1u;
                     if (merged_image_id) {
-                        GetImage(merged_image_id).binding.is_target = 1u;
+                        GetImage(merged_image_id).binding.target_gen = bind_generation;
                     }
 
                     FreeImage(cache_image_id);
@@ -527,7 +518,8 @@ ImageId TextureCache::ExpandImage(const ImageInfo& info, ImageId image_id) {
     RefreshImage(new_image);
     new_image.CopyImage(src_image);
 
-    if (src_image.binding.is_bound || src_image.binding.is_target) {
+    if (src_image.binding.bind_gen == bind_generation ||
+        src_image.binding.target_gen == bind_generation) {
         src_image.binding.needs_rebind = 1u;
     }
 
@@ -627,22 +619,16 @@ ImageId TextureCache::FindImage(ImageDesc& desc, bool exact_fmt) {
 }
 
 ImageId TextureCache::FindImageFromRange(VAddr address, size_t size, bool ensure_valid) {
-    // Like InvalidateMemoryFromGPU, only images whose guest_address == address are candidates.
-    // A direct single-page lookup avoids iterating the full [address, address+size) range.
     ImageIds image_ids;
-    const auto* page_entry = page_table.find(address >> Traits::PageBits);
-    if (page_entry) {
-        for (const ImageId image_id : *page_entry) {
-            const Image& image = slot_images[image_id];
-            if (image.info.guest_address != address) {
-                continue;
-            }
-            if (ensure_valid && !image.SafeToDownload()) {
-                continue;
-            }
-            image_ids.push_back(image_id);
+    ForEachImageInRegion(address, size, [&](ImageId image_id, Image& image) {
+        if (image.info.guest_address != address) {
+            return;
         }
-    }
+        if (ensure_valid && !image.SafeToDownload()) {
+            return;
+        }
+        image_ids.push_back(image_id);
+    });
     if (image_ids.size() == 1) {
         // Sometimes image size might not exactly match with requested buffer size
         // If we only found 1 candidate image use it without too many questions.
@@ -756,9 +742,7 @@ void TextureCache::RefreshImage(Image& image) {
         const auto addr = std::bit_cast<u8*>(image.info.guest_address);
         const u32 w = std::min(image.info.size.width, u32(8));
         const u32 h = std::min(image.info.size.height, u32(8));
-        const u32 size =
-            std::max((w * h * image.info.num_bits) >> (3 + (image.info.props.is_block ? 4 : 0)),
-                     32u);
+        const u32 size = w * h * image.info.num_bits >> (3 + image.info.props.is_block ? 4 : 0);
         const u64 hash = XXH3_64bits(addr, size);
         if (image.hash == hash) {
             image.flags &= ~ImageFlagBits::MaybeCpuDirty;
@@ -872,6 +856,9 @@ void TextureCache::UnregisterImage(ImageId image_id) {
             return;
         }
         image_ids.erase(vector_it);
+        if (image_ids.empty()) {
+            image_ids.shrink_to_fit();
+        }
     });
 }
 
@@ -1047,6 +1034,34 @@ void TextureCache::RunGarbageCollector() {
         // If we are still over the critical limit, run an aggressive GC
         configure(true);
         lru_cache.ForEachItemBelow(gc_tick - ticks_to_destroy, clean_up);
+    }
+
+    // Periodically sweep surface_metas to remove entries for images that no longer exist.
+    // This prevents unbounded growth on systems with large VRAM where GC runs infrequently.
+    constexpr u64 MetaSweepInterval = 512;
+    if ((gc_tick % MetaSweepInterval) == 0 && !surface_metas.empty()) {
+        // Build set of valid meta addresses from all live images.
+        std::unordered_set<VAddr> valid_metas;
+        valid_metas.reserve(surface_metas.size());
+        for (const auto& image : slot_images) {
+            const auto& mi = image.info.meta_info;
+            if (mi.cmask_addr) {
+                valid_metas.insert(mi.cmask_addr);
+            }
+            if (mi.fmask_addr) {
+                valid_metas.insert(mi.fmask_addr);
+            }
+            if (mi.htile_addr) {
+                valid_metas.insert(mi.htile_addr);
+            }
+        }
+        for (auto it = surface_metas.begin(); it != surface_metas.end();) {
+            if (!valid_metas.contains(it->first)) {
+                it = surface_metas.erase(it);
+            } else {
+                ++it;
+            }
+        }
     }
 }
 

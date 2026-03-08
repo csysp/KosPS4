@@ -85,40 +85,37 @@ struct StencilOps {
     }
 };
 struct DynamicState {
-    struct {
-        bool viewports : 1;
-        bool scissors : 1;
+    enum DirtyBit : u32 {
+        Viewports              = 1u << 0,
+        Scissors               = 1u << 1,
+        DepthTestEnabled       = 1u << 2,
+        DepthWriteEnabled      = 1u << 3,
+        DepthCompareOp         = 1u << 4,
+        DepthBoundsTestEnabled = 1u << 5,
+        DepthBounds            = 1u << 6,
+        DepthBiasEnabled       = 1u << 7,
+        DepthBias              = 1u << 8,
+        StencilTestEnabled     = 1u << 9,
+        StencilFrontOps        = 1u << 10,
+        StencilFrontReference  = 1u << 11,
+        StencilFrontWriteMask  = 1u << 12,
+        StencilFrontCompareMask = 1u << 13,
+        StencilBackOps         = 1u << 14,
+        StencilBackReference   = 1u << 15,
+        StencilBackWriteMask   = 1u << 16,
+        StencilBackCompareMask = 1u << 17,
+        PrimitiveRestartEnable = 1u << 18,
+        RasterizerDiscardEnable = 1u << 19,
+        CullMode               = 1u << 20,
+        FrontFace              = 1u << 21,
+        BlendConstants         = 1u << 22,
+        ColorWriteMasks        = 1u << 23,
+        LineWidth              = 1u << 24,
+        FeedbackLoopEnabled    = 1u << 25,
+        All                    = ~0u,
+    };
 
-        bool depth_test_enabled : 1;
-        bool depth_write_enabled : 1;
-        bool depth_compare_op : 1;
-
-        bool depth_bounds_test_enabled : 1;
-        bool depth_bounds : 1;
-
-        bool depth_bias_enabled : 1;
-        bool depth_bias : 1;
-
-        bool stencil_test_enabled : 1;
-        bool stencil_front_ops : 1;
-        bool stencil_front_reference : 1;
-        bool stencil_front_write_mask : 1;
-        bool stencil_front_compare_mask : 1;
-        bool stencil_back_ops : 1;
-        bool stencil_back_reference : 1;
-        bool stencil_back_write_mask : 1;
-        bool stencil_back_compare_mask : 1;
-
-        bool primitive_restart_enable : 1;
-        bool rasterizer_discard_enable : 1;
-        bool cull_mode : 1;
-        bool front_face : 1;
-
-        bool blend_constants : 1;
-        bool color_write_masks : 1;
-        bool line_width : 1;
-        bool feedback_loop_enabled : 1;
-    } dirty_state{};
+    u32 dirty_flags{};
 
     Viewports viewports{};
     Scissors scissors{};
@@ -161,48 +158,48 @@ struct DynamicState {
 
     /// Invalidates all dynamic state to be flushed into the next command buffer.
     void Invalidate() {
-        std::memset(&dirty_state, 0xFF, sizeof(dirty_state));
+        dirty_flags = DirtyBit::All;
     }
 
     void SetViewports(const Viewports& viewports_) {
         if (!std::ranges::equal(viewports, viewports_)) {
             viewports = viewports_;
-            dirty_state.viewports = true;
+            dirty_flags |= DirtyBit::Viewports;
         }
     }
 
     void SetScissors(const Scissors& scissors_) {
         if (!std::ranges::equal(scissors, scissors_)) {
             scissors = scissors_;
-            dirty_state.scissors = true;
+            dirty_flags |= DirtyBit::Scissors;
         }
     }
 
     void SetDepthTestEnabled(const bool enabled) {
         if (depth_test_enabled != enabled) {
             depth_test_enabled = enabled;
-            dirty_state.depth_test_enabled = true;
+            dirty_flags |= DirtyBit::DepthTestEnabled;
         }
     }
 
     void SetDepthWriteEnabled(const bool enabled) {
         if (depth_write_enabled != enabled) {
             depth_write_enabled = enabled;
-            dirty_state.depth_write_enabled = true;
+            dirty_flags |= DirtyBit::DepthWriteEnabled;
         }
     }
 
     void SetDepthCompareOp(const vk::CompareOp compare_op) {
         if (depth_compare_op != compare_op) {
             depth_compare_op = compare_op;
-            dirty_state.depth_compare_op = true;
+            dirty_flags |= DirtyBit::DepthCompareOp;
         }
     }
 
     void SetDepthBoundsTestEnabled(const bool enabled) {
         if (depth_bounds_test_enabled != enabled) {
             depth_bounds_test_enabled = enabled;
-            dirty_state.depth_bounds_test_enabled = true;
+            dirty_flags |= DirtyBit::DepthBoundsTestEnabled;
         }
     }
 
@@ -210,14 +207,14 @@ struct DynamicState {
         if (depth_bounds_min != min || depth_bounds_max != max) {
             depth_bounds_min = min;
             depth_bounds_max = max;
-            dirty_state.depth_bounds = true;
+            dirty_flags |= DirtyBit::DepthBounds;
         }
     }
 
     void SetDepthBiasEnabled(const bool enabled) {
         if (depth_bias_enabled != enabled) {
             depth_bias_enabled = enabled;
-            dirty_state.depth_bias_enabled = true;
+            dirty_flags |= DirtyBit::DepthBiasEnabled;
         }
     }
 
@@ -227,114 +224,114 @@ struct DynamicState {
             depth_bias_constant = constant;
             depth_bias_clamp = clamp;
             depth_bias_slope = slope;
-            dirty_state.depth_bias = true;
+            dirty_flags |= DirtyBit::DepthBias;
         }
     }
 
     void SetStencilTestEnabled(const bool enabled) {
         if (stencil_test_enabled != enabled) {
             stencil_test_enabled = enabled;
-            dirty_state.stencil_test_enabled = true;
+            dirty_flags |= DirtyBit::StencilTestEnabled;
         }
     }
 
     void SetStencilOps(const StencilOps& front_ops, const StencilOps& back_ops) {
         if (stencil_front_ops != front_ops) {
             stencil_front_ops = front_ops;
-            dirty_state.stencil_front_ops = true;
+            dirty_flags |= DirtyBit::StencilFrontOps;
         }
         if (stencil_back_ops != back_ops) {
             stencil_back_ops = back_ops;
-            dirty_state.stencil_back_ops = true;
+            dirty_flags |= DirtyBit::StencilBackOps;
         }
     }
 
     void SetStencilReferences(const u32 front_reference, const u32 back_reference) {
         if (stencil_front_reference != front_reference) {
             stencil_front_reference = front_reference;
-            dirty_state.stencil_front_reference = true;
+            dirty_flags |= DirtyBit::StencilFrontReference;
         }
         if (stencil_back_reference != back_reference) {
             stencil_back_reference = back_reference;
-            dirty_state.stencil_back_reference = true;
+            dirty_flags |= DirtyBit::StencilBackReference;
         }
     }
 
     void SetStencilWriteMasks(const u32 front_write_mask, const u32 back_write_mask) {
         if (stencil_front_write_mask != front_write_mask) {
             stencil_front_write_mask = front_write_mask;
-            dirty_state.stencil_front_write_mask = true;
+            dirty_flags |= DirtyBit::StencilFrontWriteMask;
         }
         if (stencil_back_write_mask != back_write_mask) {
             stencil_back_write_mask = back_write_mask;
-            dirty_state.stencil_back_write_mask = true;
+            dirty_flags |= DirtyBit::StencilBackWriteMask;
         }
     }
 
     void SetStencilCompareMasks(const u32 front_compare_mask, const u32 back_compare_mask) {
         if (stencil_front_compare_mask != front_compare_mask) {
             stencil_front_compare_mask = front_compare_mask;
-            dirty_state.stencil_front_compare_mask = true;
+            dirty_flags |= DirtyBit::StencilFrontCompareMask;
         }
         if (stencil_back_compare_mask != back_compare_mask) {
             stencil_back_compare_mask = back_compare_mask;
-            dirty_state.stencil_back_compare_mask = true;
+            dirty_flags |= DirtyBit::StencilBackCompareMask;
         }
     }
 
     void SetPrimitiveRestartEnabled(const bool enabled) {
         if (primitive_restart_enable != enabled) {
             primitive_restart_enable = enabled;
-            dirty_state.primitive_restart_enable = true;
+            dirty_flags |= DirtyBit::PrimitiveRestartEnable;
         }
     }
 
     void SetCullMode(const vk::CullModeFlags cull_mode_) {
         if (cull_mode != cull_mode_) {
             cull_mode = cull_mode_;
-            dirty_state.cull_mode = true;
+            dirty_flags |= DirtyBit::CullMode;
         }
     }
 
     void SetFrontFace(const vk::FrontFace front_face_) {
         if (front_face != front_face_) {
             front_face = front_face_;
-            dirty_state.front_face = true;
+            dirty_flags |= DirtyBit::FrontFace;
         }
     }
 
     void SetBlendConstants(const std::array<float, 4> blend_constants_) {
         if (blend_constants != blend_constants_) {
             blend_constants = blend_constants_;
-            dirty_state.blend_constants = true;
+            dirty_flags |= DirtyBit::BlendConstants;
         }
     }
 
     void SetRasterizerDiscardEnabled(const bool enabled) {
         if (rasterizer_discard_enable != enabled) {
             rasterizer_discard_enable = enabled;
-            dirty_state.rasterizer_discard_enable = true;
+            dirty_flags |= DirtyBit::RasterizerDiscardEnable;
         }
     }
 
     void SetColorWriteMasks(const ColorWriteMasks& color_write_masks_) {
         if (!std::ranges::equal(color_write_masks, color_write_masks_)) {
             color_write_masks = color_write_masks_;
-            dirty_state.color_write_masks = true;
+            dirty_flags |= DirtyBit::ColorWriteMasks;
         }
     }
 
     void SetLineWidth(const float width) {
         if (line_width != width) {
             line_width = width;
-            dirty_state.line_width = true;
+            dirty_flags |= DirtyBit::LineWidth;
         }
     }
 
     void SetAttachmentFeedbackLoopEnabled(const bool enabled) {
         if (feedback_loop_enabled != enabled) {
             feedback_loop_enabled = enabled;
-            dirty_state.feedback_loop_enabled = true;
+            dirty_flags |= DirtyBit::FeedbackLoopEnabled;
         }
     }
 };

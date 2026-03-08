@@ -279,18 +279,90 @@ PipelineCache::PipelineCache(const Instance& instance_, Scheduler& scheduler_,
     ASSERT_MSG(cache_result == vk::Result::eSuccess, "Failed to create pipeline cache: {}",
                vk::to_string(cache_result));
     pipeline_cache = std::move(cache);
+
+    if (Config::getAsyncShaderCompilation()) {
+        constexpr u32 NumCompileThreads = 2;
+        compile_threads.reserve(NumCompileThreads);
+        for (u32 i = 0; i < NumCompileThreads; ++i) {
+            compile_threads.emplace_back([this](std::stop_token stop) {
+                CompileThreadFunc(std::move(stop));
+            });
+        }
+        LOG_INFO(Render_Vulkan, "Async shader compilation enabled ({} threads)", NumCompileThreads);
+    }
 }
 
 PipelineCache::~PipelineCache() {
-    // Explicitly destroy shader modules; vk::ShaderModule is a plain handle type
-    // (not vk::Unique*) so Program's default destructor does not call vkDestroyShaderModule.
-    const auto device = instance.GetDevice();
-    for (auto& [_, program] : program_cache) {
-        for (auto& m : program->modules) {
+    // Signal compile threads to stop. std::jthread destructor calls request_stop() + join(),
+    // but we notify the condvar first so blocked threads wake immediately.
+    for (auto& t : compile_threads) {
+        t.request_stop();
+    }
+    job_cv.notify_all();
+    // jthread destructors join here.
+    compile_threads.clear();
+
+    // Destroy shader modules that were never transferred to a pipeline.
+    const auto& device = instance.GetDevice();
+    for (const auto& [_, program] : program_cache) {
+        for (const auto& m : program->modules) {
             if (m.module) {
                 device.destroyShaderModule(m.module);
-                m.module = nullptr;
             }
+        }
+    }
+}
+
+void PipelineCache::FlushCompletedPipelines() {
+    std::scoped_lock lock{result_mutex};
+    for (auto& item : completed_graphics) {
+        const auto pipeline_hash = std::hash<GraphicsPipelineKey>{}(item.key);
+        RegisterPipelineData(item.key, pipeline_hash, item.sdata);
+        ++num_new_pipelines;
+        graphics_pipelines.emplace(item.key, std::move(item.pipeline));
+        enqueued_graphics.erase(item.key);
+    }
+    completed_graphics.clear();
+    for (auto& item : completed_compute) {
+        RegisterPipelineData(item.key, item.sdata);
+        ++num_new_pipelines;
+        compute_pipelines.emplace(item.key, std::move(item.pipeline));
+        enqueued_compute.erase(item.key);
+    }
+    completed_compute.clear();
+}
+
+void PipelineCache::CompileThreadFunc(std::stop_token stop) {
+    while (true) {
+        AsyncJob job;
+        {
+            std::unique_lock lock{job_mutex};
+            job_cv.wait(lock, stop, [this] { return !job_queue.empty(); });
+            if (stop.stop_requested()) {
+                return;
+            }
+            job = std::move(job_queue.front());
+            job_queue.pop();
+        }
+        if (auto* gfx = std::get_if<AsyncGraphicsJob>(&job)) {
+            const auto pipeline_hash = std::hash<GraphicsPipelineKey>{}(gfx->key);
+            LOG_INFO(Render_Vulkan, "Async compiling graphics pipeline {:#x}", pipeline_hash);
+            GraphicsPipeline::SerializationSupport sdata{};
+            auto pipeline = std::make_unique<GraphicsPipeline>(
+                instance, scheduler, desc_heap, profile, gfx->key,
+                VK_NULL_HANDLE, // avoid pipeline cache external sync requirement
+                gfx->infos, gfx->runtime_infos, gfx->fetch_shader, gfx->modules, sdata, false);
+            std::scoped_lock result_lock{result_mutex};
+            completed_graphics.push_back({gfx->key, std::move(pipeline), std::move(sdata)});
+        } else if (auto* cmp = std::get_if<AsyncComputeJob>(&job)) {
+            const auto pipeline_hash = std::hash<ComputePipelineKey>{}(cmp->key);
+            LOG_INFO(Render_Vulkan, "Async compiling compute pipeline {:#x}", pipeline_hash);
+            ComputePipeline::SerializationSupport sdata{};
+            auto pipeline = std::make_unique<ComputePipeline>(
+                instance, scheduler, desc_heap, profile, VK_NULL_HANDLE, cmp->key, *cmp->info,
+                cmp->module, sdata, false);
+            std::scoped_lock result_lock{result_mutex};
+            completed_compute.push_back({cmp->key, std::move(pipeline), std::move(sdata)});
         }
     }
 }
@@ -299,29 +371,54 @@ const GraphicsPipeline* PipelineCache::GetGraphicsPipeline() {
     if (!RefreshGraphicsKey()) {
         return nullptr;
     }
+    if (Config::getAsyncShaderCompilation()) {
+        FlushCompletedPipelines();
+    }
     const auto [it, is_new] = graphics_pipelines.try_emplace(graphics_key);
-    if (is_new) {
-        const auto pipeline_hash = std::hash<GraphicsPipelineKey>{}(graphics_key);
-        LOG_INFO(Render_Vulkan, "Compiling graphics pipeline {:#x}", pipeline_hash);
+    if (!is_new) {
+        return it->second.get();
+    }
+    // Pipeline not yet compiled.
+    if (Config::getAsyncShaderCompilation()) {
+        // Remove the empty slot inserted by try_emplace, then enqueue if not already in flight.
+        graphics_pipelines.erase(it);
+        if (!enqueued_graphics.contains(graphics_key)) {
+            enqueued_graphics.emplace(graphics_key, 0u);
+            {
+                std::scoped_lock lock{job_mutex};
+                job_queue.push(AsyncGraphicsJob{
+                    .key = graphics_key,
+                    .infos = infos,
+                    .runtime_infos = runtime_infos,
+                    .modules = modules,
+                    .fetch_shader = std::exchange(fetch_shader, std::nullopt),
+                });
+            }
+            job_cv.notify_one();
+        }
+        return nullptr; // draw skipped this frame; pipeline ready next frame
+    }
+    // Synchronous compilation path.
+    const auto pipeline_hash = std::hash<GraphicsPipelineKey>{}(graphics_key);
+    LOG_INFO(Render_Vulkan, "Compiling graphics pipeline {:#x}", pipeline_hash);
 
-        GraphicsPipeline::SerializationSupport sdata{};
-        it.value() = std::make_unique<GraphicsPipeline>(
-            instance, scheduler, desc_heap, profile, graphics_key, *pipeline_cache, infos,
-            runtime_infos, fetch_shader, modules, sdata, false);
+    GraphicsPipeline::SerializationSupport sdata{};
+    it.value() = std::make_unique<GraphicsPipeline>(
+        instance, scheduler, desc_heap, profile, graphics_key, *pipeline_cache, infos,
+        runtime_infos, fetch_shader, modules, sdata, false);
 
-        RegisterPipelineData(graphics_key, pipeline_hash, sdata);
-        ++num_new_pipelines;
+    RegisterPipelineData(graphics_key, pipeline_hash, sdata);
+    ++num_new_pipelines;
 
-        if (Config::collectShadersForDebug()) {
-            for (auto stage = 0; stage < MaxShaderStages; ++stage) {
-                if (infos[stage]) {
-                    auto& m = modules[stage];
-                    module_related_pipelines[m].emplace_back(graphics_key);
-                }
+    if (Config::collectShadersForDebug()) {
+        for (auto stage = 0; stage < MaxShaderStages; ++stage) {
+            if (infos[stage]) {
+                auto& m = modules[stage];
+                module_related_pipelines[m].emplace_back(graphics_key);
             }
         }
-        fetch_shader.reset();
     }
+    fetch_shader.reset();
     return it->second.get();
 }
 
@@ -329,33 +426,52 @@ const ComputePipeline* PipelineCache::GetComputePipeline() {
     if (!RefreshComputeKey()) {
         return nullptr;
     }
+    if (Config::getAsyncShaderCompilation()) {
+        FlushCompletedPipelines();
+    }
     const auto [it, is_new] = compute_pipelines.try_emplace(compute_key);
-    if (is_new) {
-        const auto pipeline_hash = std::hash<ComputePipelineKey>{}(compute_key);
-        LOG_INFO(Render_Vulkan, "Compiling compute pipeline {:#x}", pipeline_hash);
-
-        ComputePipeline::SerializationSupport sdata{};
-        it.value() = std::make_unique<ComputePipeline>(instance, scheduler, desc_heap, profile,
-                                                       *pipeline_cache, compute_key, *infos[0],
-                                                       modules[0], sdata, false);
-        RegisterPipelineData(compute_key, sdata);
-        ++num_new_pipelines;
-
-        if (Config::collectShadersForDebug()) {
-            auto& m = modules[0];
-            module_related_pipelines[m].emplace_back(compute_key);
+    if (!is_new) {
+        return it->second.get();
+    }
+    // Pipeline not yet compiled.
+    if (Config::getAsyncShaderCompilation()) {
+        compute_pipelines.erase(it);
+        if (!enqueued_compute.contains(compute_key)) {
+            enqueued_compute.emplace(compute_key, 0u);
+            {
+                std::scoped_lock lock{job_mutex};
+                job_queue.push(AsyncComputeJob{
+                    .key = compute_key,
+                    .info = infos[0],
+                    .module = modules[0],
+                });
+            }
+            job_cv.notify_one();
         }
+        return nullptr;
+    }
+    // Synchronous compilation path.
+    const auto pipeline_hash = std::hash<ComputePipelineKey>{}(compute_key);
+    LOG_INFO(Render_Vulkan, "Compiling compute pipeline {:#x}", pipeline_hash);
+
+    ComputePipeline::SerializationSupport sdata{};
+    it.value() = std::make_unique<ComputePipeline>(instance, scheduler, desc_heap, profile,
+                                                   *pipeline_cache, compute_key, *infos[0],
+                                                   modules[0], sdata, false);
+    RegisterPipelineData(compute_key, sdata);
+    ++num_new_pipelines;
+
+    if (Config::collectShadersForDebug()) {
+        auto& m = modules[0];
+        module_related_pipelines[m].emplace_back(compute_key);
     }
     return it->second.get();
 }
 
 bool PipelineCache::RefreshGraphicsKey() {
-    // Fast path: no GPU state changed since last draw AND last build succeeded.
-    // If graphics_key_valid is false (last build failed, e.g. shader not yet loaded),
-    // fall through to retry even when no new dirty registers were written — otherwise
-    // the failed state persists until the next SetContextReg/SetShReg (e.g. on attack).
-    if (!liverpool->ConsumeGraphicsDirty() && graphics_key_valid) {
-        return true;
+    // Fast path: no GPU state changed since last draw — reuse cached key and shader infos.
+    if (!liverpool->ConsumeGraphicsDirty()) {
+        return graphics_key_valid;
     }
     graphics_key_valid = false;
     std::memset(&graphics_key, 0, sizeof(GraphicsPipelineKey));

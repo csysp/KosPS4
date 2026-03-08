@@ -32,6 +32,7 @@ class PageManager;
 
 class TextureCache {
     // Default values for garbage collection
+    static constexpr s64 DEFAULT_TRIGGER_GC_MEMORY = 768_MB;
     static constexpr s64 DEFAULT_PRESSURE_GC_MEMORY = 1_GB + 512_MB;
     static constexpr s64 DEFAULT_CRITICAL_GC_MEMORY = 3_GB;
     static constexpr s64 TARGET_GC_THRESHOLD = 8_GB;
@@ -151,16 +152,23 @@ public:
     [[nodiscard]] vk::Sampler GetSampler(const AmdGpu::Sampler& sampler,
                                          AmdGpu::BorderColorBuffer border_color_base);
 
+    /// Returns the current draw's bind generation (used for O(1) is_bound/is_target checks).
+    [[nodiscard]] u32 BindGeneration() const noexcept {
+        return bind_generation;
+    }
+
+    /// Advances the bind generation, implicitly clearing all is_bound/is_target state in O(1).
+    void AdvanceBindGeneration() noexcept {
+        if (++bind_generation == 0) {
+            ++bind_generation; // skip 0; 0 means "never bound"
+        }
+    }
+
     /// Retrieves the image with the specified id.
     [[nodiscard]] Image& GetImage(ImageId id) {
         auto& image = slot_images[id];
         TouchImage(image);
         return image;
-    }
-
-    /// Returns true if the image slot is still live (not freed by GC or overlap resolution).
-    [[nodiscard]] bool IsImageAllocated(ImageId id) const {
-        return slot_images.is_allocated(id);
     }
 
     /// Retrieves the image view with the specified id.
@@ -340,6 +348,7 @@ private:
         s32 clear_mask = -1;
     };
     tsl::robin_map<VAddr, MetaDataInfo> surface_metas;
+    u32 bind_generation{1}; ///< Incremented each draw; used for O(1) is_bound/is_target queries
 };
 
 } // namespace VideoCore

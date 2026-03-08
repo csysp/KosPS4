@@ -126,17 +126,9 @@ void Rasterizer::PrepareRenderState(const GraphicsPipeline* pipeline) {
         }
         const auto& hint = liverpool->last_cb_extent[cb];
         std::construct_at(&desc, col_buf, hint);
-        const VAddr cb_addr = col_buf.Address();
-        auto& rt = cached_cb_rt[cb];
-        if (rt.address == cb_addr && rt.extent_raw == hint.raw && rt.image_id &&
-            texture_cache.IsImageAllocated(rt.image_id)) {
-            image_id = rt.image_id;
-        } else {
-            image_id = texture_cache.FindImage(desc);
-            rt = {cb_addr, hint.raw, image_id};
-        }
-        bound_images.push_back(image_id);
-        texture_cache.GetImage(image_id).binding.is_target = 1u;
+        image_id = bound_images.emplace_back(texture_cache.FindImage(desc));
+        auto& image = texture_cache.GetImage(image_id);
+        image.binding.target_gen = texture_cache.BindGeneration();
     }
 
     if ((regs.depth_control.depth_enable && regs.depth_buffer.DepthValid()) ||
@@ -146,16 +138,9 @@ void Rasterizer::PrepareRenderState(const GraphicsPipeline* pipeline) {
         auto& [image_id, desc] = db_desc;
         std::construct_at(&desc, regs.depth_buffer, regs.depth_view, regs.depth_control,
                           htile_address, hint);
-        const VAddr db_addr = regs.depth_buffer.Address();
-        if (cached_db_rt.address == db_addr && cached_db_rt.extent_raw == hint.raw &&
-            cached_db_rt.image_id && texture_cache.IsImageAllocated(cached_db_rt.image_id)) {
-            image_id = cached_db_rt.image_id;
-        } else {
-            image_id = texture_cache.FindImage(desc);
-            cached_db_rt = {db_addr, hint.raw, image_id};
-        }
-        bound_images.push_back(image_id);
-        texture_cache.GetImage(image_id).binding.is_target = 1u;
+        image_id = bound_images.emplace_back(texture_cache.FindImage(desc));
+        auto& image = texture_cache.GetImage(image_id);
+        image.binding.target_gen = texture_cache.BindGeneration();
     } else {
         db_desc.first = {};
     }
@@ -392,10 +377,6 @@ void Rasterizer::OnSubmit() {
     texture_cache.ProcessDownloadImages();
     texture_cache.RunGarbageCollector();
     buffer_cache.RunGarbageCollector();
-    // RT and texture caches may hold stale image IDs after GC; clear for next submit.
-    cached_cb_rt.fill({});
-    cached_db_rt = {};
-    tex_lookup_cache.clear();
 }
 
 bool Rasterizer::BindResources(const Pipeline* pipeline) {
@@ -682,6 +663,8 @@ void Rasterizer::BindBuffers(const Shader::Info& stage, Shader::Backend::Binding
 void Rasterizer::BindTextures(const Shader::Info& stage, Shader::Backend::Bindings& binding) {
     image_bindings.clear();
 
+    boost::container::small_vector<std::pair<VAddr, VideoCore::ImageId>, 16> image_dedup;
+
     for (const auto& image_desc : stage.images) {
         const auto tsharp = image_desc.GetSharp(stage);
         if (texture_cache.IsMeta(tsharp.Address())) {
@@ -695,19 +678,16 @@ void Rasterizer::BindTextures(const Shader::Info& stage, Shader::Backend::Bindin
 
         auto& [image_id, desc] = image_bindings.emplace_back(std::piecewise_construct, std::tuple{},
                                                              std::tuple{tsharp, image_desc});
-        // Check submit-scoped cache before the full FindImage (mutex + page scan).
-        const VAddr tex_addr = tsharp.Address();
-        if (const auto it = tex_lookup_cache.find(tex_addr); it != tex_lookup_cache.end()) {
-            const auto cached_id = it->second;
-            if (texture_cache.IsImageAllocated(cached_id)) {
-                image_id = cached_id;
-            } else {
-                image_id = texture_cache.FindImage(desc);
-                it.value() = image_id;
-            }
+        const VAddr guest_addr = desc.info.guest_address;
+        const auto dedup_it =
+            std::ranges::find_if(image_dedup, [guest_addr](const auto& entry) {
+                return entry.first == guest_addr;
+            });
+        if (dedup_it != image_dedup.end()) {
+            image_id = dedup_it->second;
         } else {
             image_id = texture_cache.FindImage(desc);
-            tex_lookup_cache.emplace(tex_addr, image_id);
+            image_dedup.emplace_back(guest_addr, image_id);
         }
         auto* image = &texture_cache.GetImage(image_id);
         if (image->depth_id) {
@@ -716,12 +696,15 @@ void Rasterizer::BindTextures(const Shader::Info& stage, Shader::Backend::Bindin
             image_id = image->depth_id;
             image = &texture_cache.GetImage(image_id);
         }
-        if (image->binding.is_bound) {
+        const u32 gen = texture_cache.BindGeneration();
+        if (image->binding.bind_gen == gen) {
             // The image is already bound. In case if it is about to be used as storage we need
             // to force general layout on it.
             image->binding.force_general |= image_desc.is_written;
+        } else {
+            image->binding.force_general = image_desc.is_written;
+            image->binding.bind_gen = gen;
         }
-        image->binding.is_bound = 1u;
     }
 
     // Second pass to re-bind images that were updated after binding
@@ -740,10 +723,6 @@ void Rasterizer::BindTextures(const Shader::Info& stage, Shader::Backend::Bindin
                 old_image.binding.needs_rebind) {
                 old_image.binding = {};
                 image_id = texture_cache.FindImage(desc);
-                // Keep tex_lookup_cache consistent after image recreation.
-                if (desc.info.guest_address != 0) {
-                    tex_lookup_cache.insert_or_assign(desc.info.guest_address, image_id);
-                }
             }
 
             bound_images.emplace_back(image_id);
@@ -754,10 +733,11 @@ void Rasterizer::BindTextures(const Shader::Info& stage, Shader::Backend::Bindin
             // The image is either bound as storage in a separate descriptor or bound as render
             // target in feedback loop. Depth images are excluded because they can't be bound as
             // storage and feedback loop doesn't make sense for them
-            if ((image.binding.force_general || image.binding.is_target) &&
+            const bool is_target = image.binding.target_gen == texture_cache.BindGeneration();
+            if ((image.binding.force_general || is_target) &&
                 !image.info.props.is_depth) {
                 image.Transit(instance.IsAttachmentFeedbackLoopLayoutSupported() &&
-                                      image.binding.is_target
+                                      is_target
                                   ? vk::ImageLayout::eAttachmentFeedbackLoopOptimalEXT
                                   : vk::ImageLayout::eGeneral,
                               vk::AccessFlagBits2::eShaderRead |
@@ -847,7 +827,7 @@ RenderState Rasterizer::BeginRendering(const GraphicsPipeline* pipeline) {
         const bool is_clear = texture_cache.IsMetaCleared(col_buf.CmaskAddress(), slice);
         texture_cache.TouchMeta(col_buf.CmaskAddress(), slice, false);
 
-        if (image->binding.is_bound) {
+        if (image->binding.bind_gen == texture_cache.BindGeneration()) {
             ASSERT_MSG(!image->binding.force_general,
                        "Having image both as storage and render target is unsupported");
             image->Transit(instance.IsAttachmentFeedbackLoopLayoutSupported()
